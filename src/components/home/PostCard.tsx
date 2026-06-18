@@ -1,194 +1,339 @@
-import { useState, useRef } from 'react';
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import type { Post } from '../../types';
-import Avatar from '../common/Avatar';
-import { formatCount, timeAgo } from '../../utils/helpers';
-import { useStore } from '../../store/useStore';
+'use client';
+import { useState, useRef, useCallback } from 'react';
+import Image from 'next/image';
+import Link from 'next/link';
+import {
+  Heart,
+  MessageCircle,
+  Send,
+  Bookmark,
+  MoreHorizontal,
+  ChevronLeft,
+  ChevronRight,
+  BadgeCheck,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { timeAgo, formatCount } from '@/lib/utils';
+import type { Post } from '@/types';
+import Avatar from '@/components/ui/Avatar';
+import VideoPlayer from '@/components/ui/VideoPlayer';
 import CommentsSheet from './CommentsSheet';
 
 interface PostCardProps {
   post: Post;
+  /** Optional current user id – unused but accepted for compat with HomeFeed */
+  currentUserId?: string;
+}
+
+function Caption({ username, text }: { username: string; text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const shouldTruncate = text.length > 120 && !expanded;
+  const display = shouldTruncate ? text.slice(0, 120) + '…' : text;
+
+  const parts = display.split(/(#\w+)/g);
+
+  return (
+    <p className="text-sm text-gray-900 dark:text-white leading-snug">
+      <Link
+        href={`/profile/${username}`}
+        className="font-semibold mr-1.5 hover:underline"
+      >
+        {username}
+      </Link>
+      {parts.map((part, i) =>
+        part.startsWith('#') ? (
+          <Link
+            key={i}
+            href={`/explore/tags/${part.slice(1)}`}
+            className="text-blue-500 hover:underline"
+          >
+            {part}
+          </Link>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+      {shouldTruncate && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="ml-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-sm"
+        >
+          más
+        </button>
+      )}
+    </p>
+  );
 }
 
 export default function PostCard({ post }: PostCardProps) {
-  const { toggleLikePost, toggleSavePost } = useStore();
-  const [currentMedia, setCurrentMedia] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [liked, setLiked] = useState(post.isLiked ?? false);
+  const [likeCount, setLikeCount] = useState(post._count?.likes ?? 0);
+  const [saved, setSaved] = useState(post.isSaved ?? false);
   const [showHeart, setShowHeart] = useState(false);
-  const [showComments, setShowComments] = useState(false);
-  const lastTap = useRef(0);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const heartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTapRef = useRef(0);
+  const mutingRef = useRef(false);
 
-  const handleDoubleTap = () => {
-    const now = Date.now();
-    if (now - lastTap.current < 300) {
-      if (!post.isLiked) toggleLikePost(post.id);
-      setShowHeart(true);
-      setTimeout(() => setShowHeart(false), 800);
+  const mediaUrls = post.mediaUrls ?? [];
+  const isCarousel = mediaUrls.length > 1;
+
+  const doLike = useCallback(async () => {
+    const next = !liked;
+    setLiked(next);
+    setLikeCount((c) => (next ? c + 1 : Math.max(0, c - 1)));
+    try {
+      await fetch(`/api/posts/${post.id}/like`, { method: 'POST' });
+    } catch {
+      // revert on error
+      setLiked(!next);
+      setLikeCount((c) => (next ? Math.max(0, c - 1) : c + 1));
     }
-    lastTap.current = now;
-  };
+  }, [liked, post.id]);
+
+  const handleDoubleTap = useCallback(
+    (e: React.MouseEvent | React.TouchEvent) => {
+      const now = Date.now();
+      if (now - lastTapRef.current < 350) {
+        e.preventDefault();
+        if (!liked) {
+          doLike();
+        }
+        setShowHeart(true);
+        if (heartTimerRef.current) clearTimeout(heartTimerRef.current);
+        heartTimerRef.current = setTimeout(() => setShowHeart(false), 700);
+      }
+      lastTapRef.current = now;
+    },
+    [liked, doLike]
+  );
+
+  const handleSave = useCallback(async () => {
+    const next = !saved;
+    setSaved(next);
+    try {
+      await fetch(`/api/posts/${post.id}/save`, { method: 'POST' });
+    } catch {
+      setSaved(!next);
+    }
+  }, [saved, post.id]);
+
+  const prev = () => setCurrentIndex((i) => Math.max(0, i - 1));
+  const next = () => setCurrentIndex((i) => Math.min(mediaUrls.length - 1, i + 1));
 
   return (
-    <article className="bg-white dark:bg-black border-b border-gray-100 dark:border-gray-800">
+    <article className="bg-white dark:bg-black border-b border-gray-100 dark:border-gray-900">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5">
-        <Link to={`/profile/${post.user.username}`} className="flex items-center gap-2.5">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <Link href={`/profile/${post.user.username}`}>
           <Avatar
-            src={post.user.avatar}
-            alt={post.user.username}
-            size="sm"
+            src={post.user.image}
+            alt={post.user.name}
+            size="md"
             hasStory
-            isViewed={false}
+            storyViewed={false}
           />
-          <div>
-            <div className="flex items-center gap-1">
-              <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                {post.user.username}
-              </span>
-              {post.user.isVerified && (
-                <svg className="w-3.5 h-3.5 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              )}
-            </div>
-            {post.location && (
-              <div className="flex items-center gap-0.5">
-                <MapPin size={10} className="text-gray-400" />
-                <span className="text-[11px] text-gray-500 dark:text-gray-400">{post.location}</span>
-              </div>
+        </Link>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1">
+            <Link
+              href={`/profile/${post.user.username}`}
+              className="font-semibold text-sm text-gray-900 dark:text-white hover:underline truncate"
+            >
+              {post.user.username}
+            </Link>
+            {post.user.isVerified && (
+              <BadgeCheck size={14} className="text-blue-500 flex-shrink-0" />
             )}
           </div>
-        </Link>
-        <button className="p-1.5 text-gray-600 dark:text-gray-300">
+          {post.location && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+              {post.location}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          className="p-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          aria-label="Más opciones"
+        >
           <MoreHorizontal size={20} />
         </button>
       </div>
 
       {/* Media */}
-      <div className="relative bg-gray-100 dark:bg-gray-900 aspect-square" onClick={handleDoubleTap}>
-        <img
-          src={post.media[currentMedia]?.url}
-          alt=""
-          className="w-full h-full object-cover"
-          loading="lazy"
-        />
+      <div
+        className="relative aspect-square bg-gray-100 dark:bg-gray-900 overflow-hidden select-none"
+        onClick={handleDoubleTap}
+        onTouchEnd={handleDoubleTap}
+      >
+        {mediaUrls.length > 0 ? (
+          post.type === 'video' ? (
+            <VideoPlayer
+              src={mediaUrls[0]}
+              poster={undefined}
+              autoPlay
+              muted
+              loop
+              className="w-full h-full"
+            />
+          ) : (
+            <Image
+              src={mediaUrls[currentIndex]}
+              alt={`Post de ${post.user.username}`}
+              fill
+              sizes="(max-width: 768px) 100vw, 600px"
+              className="object-cover"
+              priority={false}
+            />
+          )
+        ) : (
+          <div className="w-full h-full bg-gray-200 dark:bg-gray-800" />
+        )}
 
-        {/* Carousel controls */}
-        {post.type === 'carousel' && post.media.length > 1 && (
+        {/* Carousel navigation */}
+        {isCarousel && (
           <>
-            {currentMedia > 0 && (
+            {currentIndex > 0 && (
               <button
-                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-black/40 rounded-full flex items-center justify-center text-white"
-                onClick={e => { e.stopPropagation(); setCurrentMedia(i => i - 1); }}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); prev(); }}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 flex items-center justify-center text-white"
+                aria-label="Anterior"
               >
-                <ChevronLeft size={18} />
+                <ChevronLeft size={20} />
               </button>
             )}
-            {currentMedia < post.media.length - 1 && (
+            {currentIndex < mediaUrls.length - 1 && (
               <button
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-black/40 rounded-full flex items-center justify-center text-white"
-                onClick={e => { e.stopPropagation(); setCurrentMedia(i => i + 1); }}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); next(); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 flex items-center justify-center text-white"
+                aria-label="Siguiente"
               >
-                <ChevronRight size={18} />
+                <ChevronRight size={20} />
               </button>
             )}
-            {/* Dots */}
-            <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5">
-              {post.media.map((_, i) => (
+            {/* Dot indicators */}
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1">
+              {mediaUrls.map((_, i) => (
                 <div
                   key={i}
-                  className={`w-1.5 h-1.5 rounded-full transition-colors ${i === currentMedia ? 'bg-blue-500' : 'bg-white/60'}`}
+                  className={cn(
+                    'rounded-full transition-all',
+                    i === currentIndex
+                      ? 'w-2 h-2 bg-blue-500'
+                      : 'w-1.5 h-1.5 bg-white/60'
+                  )}
                 />
               ))}
             </div>
           </>
         )}
 
-        {/* Double tap heart */}
-        <AnimatePresence>
-          {showHeart && (
-            <motion.div
-              initial={{ scale: 0, opacity: 1 }}
-              animate={{ scale: 1.3, opacity: 1 }}
-              exit={{ scale: 1.5, opacity: 0 }}
-              transition={{ duration: 0.4 }}
-              className="absolute inset-0 flex items-center justify-center pointer-events-none"
-            >
-              <Heart size={80} className="text-white fill-white drop-shadow-lg" />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* Heart burst animation on double-tap */}
+        {showHeart && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <Heart
+              size={90}
+              className="heart-burst text-white fill-white drop-shadow-lg"
+            />
+          </div>
+        )}
       </div>
 
-      {/* Actions */}
-      <div className="px-3 pt-2.5 pb-1">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => toggleLikePost(post.id)}
-              className="transition-transform active:scale-90"
-            >
-              <Heart
-                size={26}
-                className={post.isLiked ? 'text-red-500 fill-red-500' : 'text-gray-800 dark:text-white'}
-                strokeWidth={post.isLiked ? 0 : 2}
-              />
-            </button>
-            <button onClick={() => setShowComments(true)}>
-              <MessageCircle size={26} className="text-gray-800 dark:text-white" strokeWidth={1.5} />
-            </button>
-            <button>
-              <Send size={24} className="text-gray-800 dark:text-white" strokeWidth={1.5} />
-            </button>
-          </div>
-          <button onClick={() => toggleSavePost(post.id)}>
-            <Bookmark
-              size={24}
-              className={post.isSaved ? 'text-gray-900 dark:text-white fill-current' : 'text-gray-800 dark:text-white'}
-              strokeWidth={1.5}
-            />
+      {/* Actions row */}
+      <div className="px-3 pt-2 pb-1 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={doLike}
+          className={cn(
+            'transition-transform active:scale-90',
+            liked ? 'text-red-500' : 'text-gray-900 dark:text-white'
+          )}
+          aria-label={liked ? 'Quitar me gusta' : 'Me gusta'}
+        >
+          <Heart
+            size={26}
+            className={cn(liked && 'fill-red-500')}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={() => setCommentsOpen(true)}
+          className="text-gray-900 dark:text-white transition-transform active:scale-90"
+          aria-label="Comentarios"
+        >
+          <MessageCircle size={26} />
+        </button>
+        <button
+          type="button"
+          className="text-gray-900 dark:text-white transition-transform active:scale-90"
+          aria-label="Compartir"
+        >
+          <Send size={24} />
+        </button>
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={handleSave}
+          className={cn(
+            'transition-transform active:scale-90',
+            saved ? 'text-gray-900 dark:text-white' : 'text-gray-900 dark:text-white'
+          )}
+          aria-label={saved ? 'Quitar guardado' : 'Guardar'}
+        >
+          <Bookmark
+            size={26}
+            className={cn(saved && 'fill-current')}
+          />
+        </button>
+      </div>
+
+      {/* Like count */}
+      {likeCount > 0 && (
+        <div className="px-3 pb-0.5">
+          <span className="text-sm font-semibold text-gray-900 dark:text-white">
+            {formatCount(likeCount)} Me gusta
+          </span>
+        </div>
+      )}
+
+      {/* Caption */}
+      {post.caption && (
+        <div className="px-3 pb-1">
+          <Caption username={post.user.username} text={post.caption} />
+        </div>
+      )}
+
+      {/* View comments */}
+      {(post._count?.comments ?? 0) > 0 && (
+        <div className="px-3 pb-1">
+          <button
+            type="button"
+            onClick={() => setCommentsOpen(true)}
+            className="text-sm text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+          >
+            Ver {post._count!.comments} comentarios
           </button>
         </div>
+      )}
 
-        {/* Likes count */}
-        <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
-          {formatCount(post.likes)} Me gusta
-        </p>
-
-        {/* Caption */}
-        <p className="text-sm text-gray-900 dark:text-white">
-          <Link to={`/profile/${post.user.username}`} className="font-semibold hover:opacity-80">
-            {post.user.username}
-          </Link>{' '}
-          <span className="font-normal">{post.caption.replace(/#\w+/g, '')}</span>
-          {post.hashtags.map(tag => (
-            <Link key={tag} to={`/hashtag/${tag}`} className="text-blue-500 hover:text-blue-600"> #{tag}</Link>
-          ))}
-        </p>
-
-        {/* Comments preview */}
-        {post.comments.length > 0 && (
-          <button
-            className="text-sm text-gray-400 dark:text-gray-500 mt-1"
-            onClick={() => setShowComments(true)}
-          >
-            Ver los {post.comments.length} comentarios
-          </button>
-        )}
-
-        {/* Timestamp */}
-        <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-1 uppercase tracking-wide">
+      {/* Timestamp */}
+      <div className="px-3 pb-3">
+        <span className="text-[11px] text-gray-400 dark:text-gray-500 uppercase tracking-wide">
           {timeAgo(post.createdAt)}
-        </p>
+        </span>
       </div>
 
       {/* Comments sheet */}
-      <AnimatePresence>
-        {showComments && (
-          <CommentsSheet post={post} onClose={() => setShowComments(false)} />
-        )}
-      </AnimatePresence>
+      <CommentsSheet
+        postId={post.id}
+        isOpen={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+      />
     </article>
   );
 }

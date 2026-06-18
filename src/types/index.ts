@@ -1,181 +1,119 @@
-export interface User {
+export type User = {
   id: string;
+  name: string;
   username: string;
-  displayName: string;
-  avatar: string;
-  bio: string;
-  website?: string;
-  followersCount: number;
-  followingCount: number;
-  postsCount: number;
+  email: string;
+  image: string | null;
+  bio: string | null;
+  website: string | null;
   isVerified: boolean;
   isPrivate: boolean;
-  isFollowing: boolean;
-  isFollowedBy: boolean;
-  isBlocked: boolean;
-  stories: Story[];
-  highlights: Highlight[];
-}
+  createdAt: Date;
+  _count?: {
+    followers: number;
+    following: number;
+    posts: number;
+  };
+  isFollowing?: boolean;
+  isFollowedBy?: boolean;
+  isBlocked?: boolean;
+};
 
-export interface Post {
+export type Post = {
   id: string;
   userId: string;
   user: User;
   type: 'photo' | 'video' | 'carousel';
-  media: MediaItem[];
-  caption: string;
-  hashtags: string[];
-  likes: number;
-  comments: Comment[];
-  isLiked: boolean;
-  isSaved: boolean;
-  location?: string;
-  createdAt: string;
-  views?: number;
-}
+  caption: string | null;
+  location: string | null;
+  mediaUrls: string[];
+  createdAt: Date;
+  _count?: { likes: number; comments: number };
+  isLiked?: boolean;
+  isSaved?: boolean;
+};
 
-export interface Reel {
+export type Reel = {
   id: string;
   userId: string;
   user: User;
   videoUrl: string;
-  thumbnailUrl: string;
-  caption: string;
-  hashtags: string[];
-  likes: number;
-  comments: Comment[];
-  shares: number;
-  isLiked: boolean;
-  isSaved: boolean;
-  audio: {
-    title: string;
-    artist: string;
-  };
-  createdAt: string;
+  thumbnailUrl: string | null;
+  caption: string | null;
+  audioTitle: string | null;
+  audioArtist: string | null;
   views: number;
-}
+  createdAt: Date;
+  _count?: { likes: number; comments: number };
+  isLiked?: boolean;
+  isSaved?: boolean;
+};
 
-export interface MediaItem {
-  id: string;
-  url: string;
-  type: 'image' | 'video';
-  width?: number;
-  height?: number;
-}
-
-export interface Comment {
+export type Story = {
   id: string;
   userId: string;
   user: User;
-  text: string;
-  likes: number;
-  isLiked: boolean;
-  replies: Comment[];
-  createdAt: string;
-}
-
-export interface Story {
-  id: string;
-  userId: string;
-  user: User;
-  media: MediaItem;
+  mediaUrl: string;
+  mediaType: 'image' | 'video';
   duration: number;
-  viewers: number;
-  isViewed: boolean;
-  createdAt: string;
-  expiresAt: string;
-  stickers?: Sticker[];
-}
+  createdAt: Date;
+  expiresAt: Date;
+  isViewed?: boolean;
+};
 
-export interface Highlight {
+export type Comment = {
   id: string;
-  title: string;
-  coverUrl: string;
-  stories: Story[];
-}
-
-export interface Sticker {
-  id: string;
-  type: 'text' | 'emoji' | 'poll' | 'question';
+  userId: string;
+  user: User;
+  postId: string | null;
+  reelId: string | null;
+  parentId: string | null;
   content: string;
-  position: { x: number; y: number };
-}
+  createdAt: Date;
+  _count?: { likes: number; replies: number };
+  isLiked?: boolean;
+  replies?: Comment[];
+};
 
-export interface Message {
+export type Message = {
   id: string;
+  conversationId: string;
   senderId: string;
-  receiverId: string;
-  text?: string;
-  mediaUrl?: string;
-  mediaType?: 'image' | 'audio' | 'video';
+  sender: User;
+  content: string | null;
+  mediaUrl: string | null;
+  mediaType: 'image' | 'audio' | 'video' | null;
+  replyToId: string | null;
+  replyTo?: Message | null;
   isRead: boolean;
-  createdAt: string;
-  replyTo?: Message;
-  reactions?: { emoji: string; userId: string }[];
-}
+  createdAt: Date;
+};
 
-export interface Conversation {
+export type Conversation = {
   id: string;
-  participants: User[];
-  lastMessage?: Message;
-  unreadCount: number;
   isGroup: boolean;
-  groupName?: string;
-  groupAvatar?: string;
-  updatedAt: string;
-}
+  groupName: string | null;
+  groupAvatarUrl: string | null;
+  participants: User[];
+  lastMessage: Message | null;
+  unreadCount: number;
+  updatedAt: Date;
+};
 
-export interface Notification {
+export type Notification = {
   id: string;
-  type: 'like' | 'comment' | 'follow' | 'mention' | 'tag' | 'story_view' | 'live';
-  fromUser: User;
-  post?: Post;
-  text: string;
+  userId: string;
+  actor: User;
+  type: 'like' | 'comment' | 'follow' | 'mention' | 'message';
+  targetId: string | null;
+  targetType: string | null;
   isRead: boolean;
-  createdAt: string;
-}
+  createdAt: Date;
+  post?: Post | null;
+};
 
-export interface AppSettings {
-  darkMode: boolean;
-  language: string;
-  notifications: {
-    likes: boolean;
-    comments: boolean;
-    follows: boolean;
-    messages: boolean;
-    mentions: boolean;
-    stories: boolean;
-    emailNotifications: boolean;
-    pushNotifications: boolean;
-  };
-  privacy: {
-    privateAccount: boolean;
-    showActivity: boolean;
-    allowTagging: boolean;
-    allowMentions: 'everyone' | 'followers' | 'none';
-    showSuggestedContent: boolean;
-    dataSharing: boolean;
-  };
-  security: {
-    twoFactorEnabled: boolean;
-    loginAlerts: boolean;
-    savedDevices: SavedDevice[];
-    loginActivity: LoginActivity[];
-  };
-}
-
-export interface SavedDevice {
-  id: string;
-  name: string;
-  location: string;
-  lastSeen: string;
-  isCurrent: boolean;
-}
-
-export interface LoginActivity {
-  id: string;
-  device: string;
-  location: string;
-  date: string;
-  isCurrentSession: boolean;
-}
+export type ApiResponse<T> = {
+  data?: T;
+  error?: string;
+  message?: string;
+};

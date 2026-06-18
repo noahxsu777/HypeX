@@ -1,162 +1,279 @@
-import { useState, useEffect, useCallback } from 'react';
-import { X, Heart, Send } from 'lucide-react';
-import { motion } from 'framer-motion';
-import type { Story, User } from '../../types';
-import Avatar from '../common/Avatar';
-import { timeAgo } from '../../utils/helpers';
+'use client';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import Image from 'next/image';
+import { X, Send } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useSession } from 'next-auth/react';
+import { cn } from '@/lib/utils';
+import type { Story } from '@/types';
+import Avatar from '@/components/ui/Avatar';
+import VideoPlayer from '@/components/ui/VideoPlayer';
 
-interface StoryGroup {
-  userId: string;
-  user: User;
-  stories: Story[];
-}
+const STORY_DURATION_MS = 5000;
 
 interface StoryViewerProps {
-  groups: StoryGroup[];
-  initialGroupIndex: number;
+  stories: Story[];
+  initialIndex: number;
   onClose: () => void;
-  onStoryView: (storyId: string) => void;
 }
 
-export default function StoryViewer({ groups, initialGroupIndex, onClose, onStoryView }: StoryViewerProps) {
-  const [groupIdx, setGroupIdx] = useState(initialGroupIndex);
-  const [storyIdx, setStoryIdx] = useState(0);
-  const [progress, setProgress] = useState(0);
+export default function StoryViewer({ stories, initialIndex, onClose }: StoryViewerProps) {
+  const { data: session } = useSession();
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [paused, setPaused] = useState(false);
+  const [showReply, setShowReply] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
+  const progressRef = useRef<HTMLDivElement | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startTimeRef = useRef<number>(Date.now());
+  const elapsedRef = useRef<number>(0);
 
-  const currentGroup = groups[groupIdx];
-  const currentStory = currentGroup?.stories[storyIdx];
-
-  const STORY_DURATION = 5000;
+  const story = stories[currentIndex];
+  const duration = (story?.duration ?? STORY_DURATION_MS / 1000) * 1000;
 
   const goNext = useCallback(() => {
-    if (storyIdx < currentGroup.stories.length - 1) {
-      setStoryIdx(idx => idx + 1);
-      setProgress(0);
-    } else if (groupIdx < groups.length - 1) {
-      setGroupIdx(idx => idx + 1);
-      setStoryIdx(0);
-      setProgress(0);
+    if (currentIndex < stories.length - 1) {
+      setCurrentIndex((i) => i + 1);
+      elapsedRef.current = 0;
     } else {
       onClose();
     }
-  }, [storyIdx, groupIdx, currentGroup, groups, onClose]);
+  }, [currentIndex, stories.length, onClose]);
 
   const goPrev = useCallback(() => {
-    if (storyIdx > 0) {
-      setStoryIdx(idx => idx - 1);
-      setProgress(0);
-    } else if (groupIdx > 0) {
-      setGroupIdx(idx => idx - 1);
-      setStoryIdx(0);
-      setProgress(0);
+    if (currentIndex > 0) {
+      setCurrentIndex((i) => i - 1);
+      elapsedRef.current = 0;
     }
-  }, [storyIdx, groupIdx]);
+  }, [currentIndex]);
 
+  // Auto-advance timer
   useEffect(() => {
-    if (currentStory) {
-      onStoryView(currentStory.id);
+    if (paused || showReply) return;
+    elapsedRef.current = 0;
+    startTimeRef.current = Date.now();
+
+    timerRef.current = setTimeout(() => {
+      goNext();
+    }, duration);
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      elapsedRef.current += Date.now() - startTimeRef.current;
+    };
+  }, [currentIndex, paused, showReply, duration, goNext]);
+
+  // Mark as viewed
+  useEffect(() => {
+    if (!story) return;
+    fetch(`/api/stories/${story.id}/view`, { method: 'POST' }).catch(() => {});
+  }, [story]);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight') goNext();
+      if (e.key === 'ArrowLeft') goPrev();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose, goNext, goPrev]);
+
+  const handleTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (showReply) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x < rect.width / 2) {
+      goPrev();
+    } else {
+      goNext();
     }
-  }, [currentStory?.id]);
+  };
 
-  useEffect(() => {
-    if (paused) return;
-    const interval = setInterval(() => {
-      setProgress(p => {
-        if (p >= 100) {
-          goNext();
-          return 0;
-        }
-        return p + (100 / (STORY_DURATION / 50));
+  const handleReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyText.trim() || sending) return;
+    setSending(true);
+    try {
+      await fetch(`/api/stories/${story.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: replyText.trim() }),
       });
-    }, 50);
-    return () => clearInterval(interval);
-  }, [paused, goNext, storyIdx, groupIdx]);
+      setReplyText('');
+      setShowReply(false);
+    } catch {
+      // ignore
+    } finally {
+      setSending(false);
+    }
+  };
 
-  if (!currentStory) return null;
+  if (!story) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[100] bg-black"
-    >
-      <div
-        className="relative w-full h-full max-w-sm mx-auto"
-        onPointerDown={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          if (x < rect.width / 2) goPrev();
-          else goNext();
-        }}
-        onMouseDown={() => setPaused(true)}
-        onMouseUp={() => setPaused(false)}
-        onTouchStart={() => setPaused(true)}
-        onTouchEnd={() => setPaused(false)}
+    <AnimatePresence>
+      <motion.div
+        key="story-viewer"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 bg-black flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Historia de ${story.user.name}`}
       >
-        {/* Story image */}
-        <img
-          src={currentStory.media.url}
-          alt=""
-          className="w-full h-full object-cover"
-        />
-
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/40" />
-
         {/* Progress bars */}
-        <div className="absolute top-3 left-3 right-3 flex gap-1">
-          {currentGroup.stories.map((s, i) => (
-            <div key={s.id} className="flex-1 h-0.5 bg-white/40 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-white rounded-full transition-none"
-                style={{
-                  width: i < storyIdx ? '100%' : i === storyIdx ? `${progress}%` : '0%',
-                }}
-              />
+        <div className="absolute top-0 left-0 right-0 z-10 flex gap-1 px-3 pt-safe pt-2">
+          {stories.map((_, i) => (
+            <div
+              key={i}
+              className="flex-1 h-0.5 bg-white/30 rounded-full overflow-hidden"
+            >
+              {i < currentIndex ? (
+                // Fully filled for past stories
+                <div className="h-full w-full bg-white" />
+              ) : i === currentIndex ? (
+                // Animating for current story
+                <div
+                  key={`prog-${currentIndex}`}
+                  className={cn(
+                    'h-full bg-white story-progress-animate',
+                    !paused && !showReply && 'story-progress-animate'
+                  )}
+                  style={{
+                    animationDuration: `${duration}ms`,
+                    animationPlayState: paused || showReply ? 'paused' : 'running',
+                  }}
+                />
+              ) : null}
             </div>
           ))}
         </div>
 
         {/* Header */}
-        <div className="absolute top-8 left-3 right-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Avatar src={currentGroup.user.avatar} alt={currentGroup.user.username} size="sm" />
-            <div>
-              <p className="text-white font-semibold text-sm">{currentGroup.user.username}</p>
-              <p className="text-white/70 text-xs">{timeAgo(currentStory.createdAt)}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-white p-1">
-            <X size={22} />
-          </button>
-        </div>
-
-        {/* Reply bar */}
-        <div
-          className="absolute bottom-8 left-4 right-4 flex items-center gap-3"
-          onPointerDown={e => e.stopPropagation()}
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-3 px-4 pt-safe"
+          style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 20px)' }}
         >
-          <input
-            value={replyText}
-            onChange={e => setReplyText(e.target.value)}
-            placeholder="Responder..."
-            className="flex-1 bg-white/20 text-white placeholder-white/60 rounded-full px-4 py-2.5 text-sm backdrop-blur-sm border border-white/30 focus:outline-none focus:border-white/60"
+          <Avatar
+            src={story.user.image}
+            alt={story.user.name}
+            size="sm"
           />
-          <button className="text-white">
-            <Heart size={24} />
-          </button>
-          <button className="text-white">
-            <Send size={22} />
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-semibold leading-none truncate">
+              {story.user.username}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-9 h-9 rounded-full bg-black/30 flex items-center justify-center text-white hover:bg-black/50 transition-colors"
+            aria-label="Cerrar"
+          >
+            <X size={20} />
           </button>
         </div>
 
-        {/* Navigation areas (invisible) */}
-        <div className="absolute inset-y-1/4 left-0 w-1/3" />
-        <div className="absolute inset-y-1/4 right-0 w-1/3" />
-      </div>
-    </motion.div>
+        {/* Story media — tap to navigate */}
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          onClick={handleTap}
+          onPointerDown={() => setPaused(true)}
+          onPointerUp={() => setPaused(false)}
+          onPointerLeave={() => setPaused(false)}
+        >
+          {story.mediaType === 'video' ? (
+            <VideoPlayer
+              src={story.mediaUrl}
+              autoPlay
+              muted={false}
+              loop={false}
+              className="w-full h-full"
+            />
+          ) : (
+            <Image
+              src={story.mediaUrl}
+              alt={`Historia de ${story.user.name}`}
+              fill
+              sizes="100vw"
+              className="object-contain"
+              priority
+            />
+          )}
+        </div>
+
+        {/* Swipe up / reply area */}
+        <div className="absolute bottom-0 left-0 right-0 z-10 pb-safe">
+          <AnimatePresence mode="wait">
+            {showReply ? (
+              <motion.form
+                key="reply-input"
+                initial={{ y: 60, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 60, opacity: 0 }}
+                onSubmit={handleReply}
+                className="flex items-center gap-3 px-4 pb-6 pt-3"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Avatar
+                  src={session?.user?.image}
+                  alt={session?.user?.name ?? 'Yo'}
+                  size="sm"
+                  className="flex-shrink-0"
+                />
+                <input
+                  type="text"
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  placeholder={`Responder a ${story.user.username}…`}
+                  autoFocus
+                  className={cn(
+                    'flex-1 glass rounded-full px-4 py-2.5 text-sm text-white',
+                    'placeholder-white/60 border border-white/30',
+                    'focus:outline-none focus:border-white/60'
+                  )}
+                  onKeyDown={(e) => e.key === 'Escape' && setShowReply(false)}
+                />
+                <button
+                  type="submit"
+                  disabled={!replyText.trim() || sending}
+                  className="text-white disabled:opacity-40 transition-opacity"
+                  aria-label="Enviar respuesta"
+                >
+                  <Send size={22} />
+                </button>
+              </motion.form>
+            ) : (
+              <motion.div
+                key="reply-hint"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex items-center justify-center px-4 pb-8 pt-4"
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowReply(true);
+                  }}
+                  className={cn(
+                    'flex items-center gap-2 glass rounded-full px-6 py-2.5',
+                    'border border-white/20 text-white/80 text-sm'
+                  )}
+                  aria-label="Responder a la historia"
+                >
+                  <Send size={16} />
+                  <span>Responder…</span>
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </motion.div>
+    </AnimatePresence>
   );
 }

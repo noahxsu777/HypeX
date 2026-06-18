@@ -1,68 +1,127 @@
-import { NavLink, useLocation } from 'react-router-dom';
+'use client';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { Home, Search, PlusSquare, Film, User } from 'lucide-react';
-import { useStore } from '../../store/useStore';
-import { cn } from '../../utils/helpers';
+import { useSession } from 'next-auth/react';
+import { cn } from '@/lib/utils';
+import Avatar from '@/components/ui/Avatar';
 
-export default function BottomNav() {
-  const location = useLocation();
-  const { getUnreadMessagesCount } = useStore();
-  const unreadMsgs = getUnreadMessagesCount();
+interface BottomNavProps {
+  unreadNotifications?: number;
+  unreadMessages?: number;
+  /** Optional pre-fetched user (from MainLayout server component) */
+  user?: { id?: string; name?: string | null; image?: string | null; email?: string | null } | null;
+}
 
-  const isReels = location.pathname === '/reels';
+interface NavItem {
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+  isCreate?: boolean;
+}
 
-  const links = [
-    { to: '/', icon: Home, label: 'Inicio' },
-    { to: '/explore', icon: Search, label: 'Explorar' },
-    { to: '/create', icon: PlusSquare, label: 'Crear' },
-    { to: '/reels', icon: Film, label: 'Reels' },
-    { to: '/profile', icon: User, label: 'Perfil' },
+export default function BottomNav({ unreadNotifications: _unreadNotifications, unreadMessages: _unreadMessages }: BottomNavProps) {
+  const pathname = usePathname();
+  const { data: session } = useSession();
+
+  const isReels = pathname === '/reels';
+
+  const items: NavItem[] = [
+    {
+      href: '/',
+      label: 'Inicio',
+      icon: <Home size={26} />,
+    },
+    {
+      href: '/explore',
+      label: 'Explorar',
+      icon: <Search size={26} />,
+    },
+    {
+      href: '/create',
+      label: 'Crear',
+      icon: <PlusSquare size={28} />,
+      isCreate: true,
+    },
+    {
+      href: '/reels',
+      label: 'Reels',
+      icon: <Film size={26} />,
+    },
+    {
+      href: '/profile',
+      label: 'Perfil',
+      icon:
+        session?.user?.image ? (
+          <Avatar
+            src={session.user.image}
+            alt={session.user.name ?? 'Perfil'}
+            size="xs"
+            className={cn(
+              'ring-2 ring-offset-1',
+              pathname === '/profile'
+                ? 'ring-purple-500'
+                : 'ring-transparent'
+            )}
+          />
+        ) : (
+          <User size={26} />
+        ),
+    },
   ];
 
   return (
-    <nav className={cn(
-      'fixed bottom-0 left-0 right-0 z-50 bottom-nav',
-      isReels
-        ? 'bg-transparent'
-        : 'bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800'
-    )}>
-      <div className="flex items-center justify-around py-2 max-w-lg mx-auto px-2">
-        {links.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) => cn(
-              'flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all duration-200',
-              isActive
-                ? isReels
-                  ? 'text-white'
-                  : 'text-black dark:text-white'
-                : isReels
-                  ? 'text-white/60'
-                  : 'text-gray-400 dark:text-gray-500',
-            )}
-          >
-            {({ isActive }) => (
-              <>
-                <div className="relative">
-                  <Icon
-                    size={24}
-                    strokeWidth={isActive ? 2.5 : 1.5}
-                    className={isActive ? 'scale-110 transition-transform' : ''}
-                  />
-                  {to === '/profile' && unreadMsgs > 0 && (
-                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-rose-500 rounded-full" />
-                  )}
+    <nav
+      className={cn(
+        'fixed bottom-0 left-0 right-0 z-30 pb-safe',
+        isReels
+          ? 'bg-transparent'
+          : 'nav-blur border-t border-gray-200 dark:border-gray-800'
+      )}
+      aria-label="Navegación principal"
+    >
+      <div className="flex items-center justify-around px-2 h-14">
+        {items.map((item) => {
+          const isActive =
+            item.href === '/'
+              ? pathname === '/'
+              : pathname.startsWith(item.href);
+
+          if (item.isCreate) {
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-label={item.label}
+                className="flex items-center justify-center"
+              >
+                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 flex items-center justify-center shadow-md text-white">
+                  <PlusSquare size={24} />
                 </div>
-                <span className={cn(
-                  'text-[10px] font-medium',
-                  isActive ? 'opacity-100' : 'opacity-0'
-                )}>
-                  {label}
-                </span>
-              </>
-            )}
-          </NavLink>
-        ))}
+              </Link>
+            );
+          }
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-label={item.label}
+              className={cn(
+                'flex flex-col items-center justify-center w-12 h-full transition-opacity',
+                isReels
+                  ? isActive
+                    ? 'text-white opacity-100'
+                    : 'text-white opacity-60'
+                  : isActive
+                  ? 'text-gray-900 dark:text-white opacity-100'
+                  : 'text-gray-400 dark:text-gray-500 opacity-100'
+              )}
+            >
+              {item.icon}
+            </Link>
+          );
+        })}
       </div>
     </nav>
   );

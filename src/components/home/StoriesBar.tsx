@@ -1,66 +1,102 @@
-import { useState } from 'react';
+'use client';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { Plus } from 'lucide-react';
-import Avatar from '../common/Avatar';
-import StoryViewer from '../stories/StoryViewer';
-import { useStore } from '../../store/useStore';
+import { useSession } from 'next-auth/react';
+import { cn } from '@/lib/utils';
+import type { Story } from '@/types';
+import Avatar from '@/components/ui/Avatar';
+import StoryViewer from '@/components/stories/StoryViewer';
 
-export default function StoriesBar() {
-  const { stories, currentUser, markStoryViewed } = useStore();
-  const [activeStoryIdx, setActiveStoryIdx] = useState<number | null>(null);
+interface StoriesBarProps {
+  className?: string;
+}
 
-  const userStories = stories.reduce((acc, story) => {
-    const existing = acc.find(g => g.userId === story.userId);
-    if (existing) {
-      existing.stories.push(story);
-    } else {
-      acc.push({ userId: story.userId, user: story.user, stories: [story] });
-    }
-    return acc;
-  }, [] as { userId: string; user: typeof stories[0]['user']; stories: typeof stories }[]);
+function StorySkeletonItem() {
+  return (
+    <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+      <div className="w-16 h-16 rounded-full bg-gray-200 dark:bg-gray-700 skeleton" />
+      <div className="h-2.5 w-12 bg-gray-200 dark:bg-gray-700 rounded skeleton" />
+    </div>
+  );
+}
+
+export default function StoriesBar({ className }: StoriesBarProps) {
+  const { data: session } = useSession();
+  const [stories, setStories] = useState<Story[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
+  useEffect(() => {
+    fetch('/api/stories')
+      .then((r) => r.json())
+      .then((json) => setStories(json.data ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const openStory = (index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  };
 
   return (
     <>
-      <div className="flex gap-4 overflow-x-auto hide-scrollbar px-4 py-3">
+      <div
+        className={cn(
+          'flex gap-4 px-4 py-3 overflow-x-auto no-scrollbar',
+          'bg-white dark:bg-black border-b border-gray-100 dark:border-gray-900',
+          className
+        )}
+      >
         {/* My story */}
         <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
-          <div className="relative">
-            <Avatar src={currentUser.avatar} alt="Tu historia" size="lg" />
-            <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center border-2 border-white dark:border-black">
-              <Plus size={10} className="text-white" strokeWidth={3} />
-            </div>
-          </div>
-          <span className="text-[11px] text-gray-600 dark:text-gray-400 w-14 text-center truncate">
+          <Link href="/stories/create" className="relative">
+            <Avatar
+              src={session?.user?.image}
+              alt={session?.user?.name ?? 'Tu historia'}
+              size="lg"
+              className="ring-2 ring-gray-200 dark:ring-gray-700"
+            />
+            <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center ring-2 ring-white dark:ring-black">
+              <Plus size={12} className="text-white" strokeWidth={3} />
+            </span>
+          </Link>
+          <span className="text-[11px] text-gray-600 dark:text-gray-400 truncate w-16 text-center">
             Tu historia
           </span>
         </div>
 
         {/* Other stories */}
-        {userStories.map((group, idx) => (
-          <div
-            key={group.userId}
-            className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer"
-            onClick={() => setActiveStoryIdx(idx)}
-          >
-            <Avatar
-              src={group.user.avatar}
-              alt={group.user.username}
-              size="lg"
-              hasStory
-              isViewed={group.stories.every(s => s.isViewed)}
-            />
-            <span className="text-[11px] text-gray-600 dark:text-gray-400 w-14 text-center truncate">
-              {group.user.username}
-            </span>
-          </div>
-        ))}
+        {loading
+          ? Array.from({ length: 5 }).map((_, i) => <StorySkeletonItem key={i} />)
+          : stories.map((story, i) => (
+              <button
+                key={story.id}
+                type="button"
+                onClick={() => openStory(i)}
+                className="flex flex-col items-center gap-1.5 flex-shrink-0 focus:outline-none"
+              >
+                <Avatar
+                  src={story.user.image}
+                  alt={story.user.name}
+                  size="lg"
+                  hasStory
+                  storyViewed={story.isViewed}
+                />
+                <span className="text-[11px] text-gray-600 dark:text-gray-400 truncate w-16 text-center">
+                  {story.user.username}
+                </span>
+              </button>
+            ))}
       </div>
 
-      {activeStoryIdx !== null && (
+      {viewerOpen && stories.length > 0 && (
         <StoryViewer
-          groups={userStories}
-          initialGroupIndex={activeStoryIdx}
-          onClose={() => setActiveStoryIdx(null)}
-          onStoryView={markStoryViewed}
+          stories={stories}
+          initialIndex={viewerIndex}
+          onClose={() => setViewerOpen(false)}
         />
       )}
     </>

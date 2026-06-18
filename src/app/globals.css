@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Hide scrollbar */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Thin scrollbar */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.3); border-radius: 2px; }
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #833ab4 0%, #fd1d1d 50%, #fcb045 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Story ring */
+.story-ring {
+  background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+  padding: 2px;
+  border-radius: 50%;
+}
+.story-ring-viewed {
+  background: #d1d5db;
+  padding: 2px;
+  border-radius: 50%;
+}
+.dark .story-ring-viewed { background: #374151; }
+.story-ring-inner {
+  background: white;
+  border-radius: 50%;
+  padding: 2px;
+}
+.dark .story-ring-inner { background: #000; }
+
+/* Glass morphism */
+.glass {
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.dark .glass { background: rgba(0,0,0,0.4); }
+
+/* Snap scroll for reels */
+.snap-y-mandatory { scroll-snap-type: y mandatory; }
+.snap-start { scroll-snap-align: start; scroll-snap-stop: always; }
+
+/* iMessage bubbles */
+.bubble-sent { border-radius: 20px 20px 4px 20px; }
+.bubble-received { border-radius: 20px 20px 20px 4px; }
+
+/* Post grid */
+.explore-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 2px; }
+
+/* Safe area padding */
+.pb-safe { padding-bottom: env(safe-area-inset-bottom, 0); }
+.pt-safe { padding-top: env(safe-area-inset-top, 0); }
+
+/* Loading skeleton */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.skeleton { animation: skeleton-pulse 1.5s ease-in-out infinite; }
+
+/* Heart burst animation */
+@keyframes heartBurst {
+  0% { transform: scale(0) rotate(-30deg); opacity: 1; }
+  50% { transform: scale(1.4) rotate(5deg); opacity: 1; }
+  100% { transform: scale(1.2) rotate(0deg); opacity: 0; }
+}
+.heart-burst { animation: heartBurst 0.7s ease-out forwards; }
+
+/* Marquee for audio title */
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.marquee { animation: marquee 10s linear infinite; white-space: nowrap; }
+
+/* Progress bar for stories */
+@keyframes story-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.story-progress-animate {
+  transform-origin: left;
+  animation: story-progress linear forwards;
+}
+
+/* Bottom nav blur bg on dark */
+.nav-blur {
+  background: rgba(255,255,255,0.9);
+  backdrop-filter: blur(20px);
+}
+.dark .nav-blur { background: rgba(0,0,0,0.9); }
+
+/* Upload drag zone */
+.drag-active { border-color: #6366f1; background: rgba(99,102,241,0.05); }
