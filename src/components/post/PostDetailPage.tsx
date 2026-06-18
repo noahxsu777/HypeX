@@ -10,7 +10,7 @@ import { timeAgo, formatCount } from '@/lib/utils';
 import CommentsSheet from '@/components/home/CommentsSheet';
 import { useState } from 'react';
 
-export default function PostDetailPage({ postId }: { postId: string; currentUserId: string }) {
+export default function PostDetailPage({ postId, currentUserId }: { postId: string; currentUserId: string }) {
   const router = useRouter();
   const [showComments, setShowComments] = useState(false);
 
@@ -55,7 +55,7 @@ export default function PostDetailPage({ postId }: { postId: string; currentUser
       {/* Post author */}
       <div className="flex items-center gap-3 px-4 py-3">
         <Link href={`/profile/${post.user.username}`}>
-          <Avatar src={post.user.image} alt={post.user.name} size="md" />
+          <Avatar src={post.user.image} alt={post.user.name ?? post.user.username ?? ''} size="md" />
         </Link>
         <div className="flex-1">
           <Link href={`/profile/${post.user.username}`}>
@@ -66,10 +66,10 @@ export default function PostDetailPage({ postId }: { postId: string; currentUser
       </div>
 
       {/* Media */}
-      {post.mediaUrls[0] && (
+      {post.media_urls?.[0] && (
         <div className="aspect-square overflow-hidden">
           <img
-            src={post.mediaUrls[0]}
+            src={post.media_urls[0]}
             alt=""
             className="w-full h-full object-cover"
           />
@@ -79,7 +79,7 @@ export default function PostDetailPage({ postId }: { postId: string; currentUser
       {/* Actions */}
       <div className="flex items-center px-4 py-2 gap-4">
         <button className="p-1">
-          <Heart size={26} className={post.isLiked ? 'text-red-500 fill-current' : 'text-gray-700 dark:text-gray-300'} />
+          <Heart size={26} className={post.is_liked ? 'text-red-500 fill-current' : 'text-gray-700 dark:text-gray-300'} />
         </button>
         <button onClick={() => setShowComments(true)} className="p-1">
           <MessageCircle size={26} className="text-gray-700 dark:text-gray-300" />
@@ -89,7 +89,7 @@ export default function PostDetailPage({ postId }: { postId: string; currentUser
         </button>
         <div className="flex-1" />
         <button className="p-1">
-          <Bookmark size={26} className={post.isSaved ? 'fill-current text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'} />
+          <Bookmark size={26} className={post.is_saved ? 'fill-current text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'} />
         </button>
       </div>
 
@@ -115,10 +115,11 @@ export default function PostDetailPage({ postId }: { postId: string; currentUser
         </p>
       </button>
 
-      <p className="px-4 py-1 text-[11px] text-gray-400 uppercase">{timeAgo(post.createdAt)}</p>
+      <p className="px-4 py-1 text-[11px] text-gray-400 uppercase">{timeAgo(post.created_at)}</p>
 
       <CommentsSheet
         postId={post.id}
+        currentUserId={currentUserId}
         isOpen={showComments}
         onClose={() => setShowComments(false)}
       />

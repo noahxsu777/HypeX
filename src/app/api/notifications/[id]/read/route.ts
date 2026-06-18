@@ -1,40 +1,39 @@
-import { NextResponse } from 'next/server';
-import { eq, and } from 'drizzle-orm';
-import { db } from '@/db';
-import { notifications } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
 export async function PATCH(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const userId = session.user.id;
 
-    const existing = await db
-      .select()
-      .from(notifications)
-      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
-      .limit(1);
+    const { data: existing } = await supabase
+      .from('notifications')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .maybeSingle();
 
-    if (existing.length === 0) {
+    if (!existing) {
       return NextResponse.json({ error: 'Notification not found' }, { status: 404 });
     }
 
-    await db
-      .update(notifications)
-      .set({ isRead: true })
-      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (error) throw error;
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[notifications/[id]/read PATCH]', error);
+    console.error('PATCH /api/notifications/[id]/read error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -1,18 +1,11 @@
-import { auth } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 import ChatWindow from '@/components/messages/ChatWindow';
 
-interface Props {
-  params: Promise<{ conversationId: string }>;
-}
-
-export default async function ChatPage({ params }: Props) {
-  const [session, { conversationId }] = await Promise.all([auth(), params]);
-  return (
-    <ChatWindow
-      conversationId={conversationId}
-      currentUserId={session!.user!.id as string}
-      currentUserName={session!.user!.name || ''}
-      currentUserImage={session!.user!.image || null}
-    />
-  );
+export default async function ConversationPage({ params }: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  return <ChatWindow conversationId={conversationId} currentUserId={user.id} />;
 }

@@ -1,119 +1,104 @@
-export type User = {
+export type Profile = {
   id: string;
-  name: string;
-  username: string;
-  email: string;
-  image: string | null;
+  username: string | null;
+  name: string | null;
   bio: string | null;
   website: string | null;
-  isVerified: boolean;
-  isPrivate: boolean;
-  createdAt: Date;
-  _count?: {
-    followers: number;
-    following: number;
-    posts: number;
-  };
-  isFollowing?: boolean;
-  isFollowedBy?: boolean;
-  isBlocked?: boolean;
+  image: string | null;
+  is_verified: boolean;
+  is_private: boolean;
+  created_at: string;
+  _count?: { followers: number; following: number; posts: number };
+  is_following?: boolean;
 };
 
 export type Post = {
   id: string;
-  userId: string;
-  user: User;
+  user_id: string;
+  user: Profile;
   type: 'photo' | 'video' | 'carousel';
   caption: string | null;
   location: string | null;
-  mediaUrls: string[];
-  createdAt: Date;
+  media_urls: string[];
+  created_at: string;
   _count?: { likes: number; comments: number };
-  isLiked?: boolean;
-  isSaved?: boolean;
+  is_liked?: boolean;
+  is_saved?: boolean;
 };
 
 export type Reel = {
   id: string;
-  userId: string;
-  user: User;
-  videoUrl: string;
-  thumbnailUrl: string | null;
+  user_id: string;
+  user: Profile;
+  video_url: string;
+  thumbnail_url: string | null;
   caption: string | null;
-  audioTitle: string | null;
-  audioArtist: string | null;
+  audio_title: string | null;
+  audio_artist: string | null;
   views: number;
-  createdAt: Date;
+  created_at: string;
   _count?: { likes: number; comments: number };
-  isLiked?: boolean;
-  isSaved?: boolean;
+  is_liked?: boolean;
 };
 
 export type Story = {
   id: string;
-  userId: string;
-  user: User;
-  mediaUrl: string;
-  mediaType: 'image' | 'video';
+  user_id: string;
+  user: Profile;
+  media_url: string;
+  media_type: 'image' | 'video';
   duration: number;
-  createdAt: Date;
-  expiresAt: Date;
-  isViewed?: boolean;
+  created_at: string;
+  expires_at: string;
+  is_viewed?: boolean;
 };
 
 export type Comment = {
   id: string;
-  userId: string;
-  user: User;
-  postId: string | null;
-  reelId: string | null;
-  parentId: string | null;
+  user_id: string;
+  user: Profile;
+  post_id: string | null;
+  reel_id: string | null;
+  parent_id: string | null;
   content: string;
-  createdAt: Date;
+  created_at: string;
   _count?: { likes: number; replies: number };
-  isLiked?: boolean;
-  replies?: Comment[];
+  is_liked?: boolean;
 };
 
 export type Message = {
   id: string;
-  conversationId: string;
-  senderId: string;
-  sender: User;
+  conversation_id: string;
+  sender_id: string;
+  sender: Profile;
   content: string | null;
-  mediaUrl: string | null;
-  mediaType: 'image' | 'audio' | 'video' | null;
-  replyToId: string | null;
-  replyTo?: Message | null;
-  isRead: boolean;
-  createdAt: Date;
+  media_url: string | null;
+  media_type: 'image' | 'audio' | 'video' | null;
+  reply_to_id: string | null;
+  reply_to?: Message | null;
+  is_read: boolean;
+  created_at: string;
 };
 
 export type Conversation = {
   id: string;
-  isGroup: boolean;
-  groupName: string | null;
-  groupAvatarUrl: string | null;
-  participants: User[];
-  lastMessage: Message | null;
-  unreadCount: number;
-  updatedAt: Date;
+  is_group: boolean;
+  group_name: string | null;
+  group_avatar_url: string | null;
+  participants: Profile[];
+  last_message: Message | null;
+  unread_count: number;
+  updated_at: string;
 };
 
 export type Notification = {
   id: string;
-  userId: string;
-  actor: User;
+  user_id: string;
+  actor: Profile;
   type: 'like' | 'comment' | 'follow' | 'mention' | 'message';
-  targetId: string | null;
-  targetType: string | null;
-  isRead: boolean;
-  createdAt: Date;
+  target_id: string | null;
+  target_type: string | null;
+  is_read: boolean;
+  created_at: string;
   post?: Post | null;
-};
-
-export type ApiResponse<T> = {
-  data?: T;
-  error?: string;
-  message?: string;
 };

@@ -2,22 +2,23 @@
 import { useRef, useState, useCallback } from 'react';
 import { Camera, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { createClient } from '@/lib/supabase/client';
 import LoadingSpinner from './LoadingSpinner';
 
 interface ImageUploaderProps {
   onUpload: (url: string) => void;
+  folder?: string;
   accept?: string;
   multiple?: boolean;
-  folder?: string;
   children?: React.ReactNode;
   className?: string;
 }
 
 export default function ImageUploader({
   onUpload,
+  folder = 'posts',
   accept = 'image/*,video/*',
   multiple = false,
-  folder = 'posts',
   children,
   className,
 }: ImageUploaderProps) {
@@ -31,17 +32,18 @@ export default function ImageUploader({
       setLoading(true);
       setError(null);
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('folder', folder);
-
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
-        const json = await res.json();
-
-        if (!res.ok) {
-          throw new Error(json.error ?? 'Error al subir archivo');
-        }
-        onUpload(json.url as string);
+        const supabase = createClient();
+        const ext = file.name.split('.').pop() ?? 'bin';
+        const safeName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+        const path = `${folder}/${Date.now()}-${safeName}`;
+        const { data, error: uploadError } = await supabase.storage
+          .from('media')
+          .upload(path, file);
+        if (uploadError) throw uploadError;
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from('media').getPublicUrl(data.path);
+        onUpload(publicUrl);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error al subir archivo');
       } finally {
@@ -61,7 +63,6 @@ export default function ImageUploader({
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     handleFiles(e.target.files);
-    // Reset so the same file can be re-selected
     e.target.value = '';
   };
 

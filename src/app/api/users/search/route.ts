@@ -1,18 +1,13 @@
-import { NextResponse } from 'next/server';
-import { eq, and, count, or, ilike } from 'drizzle-orm';
-import { db } from '@/db';
-import { users, follows } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
-export async function GET(req: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const currentUserId = session.user.id;
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = new URL(request.url);
     const q = searchParams.get('q')?.trim();
 
     if (!q) {
@@ -21,59 +16,49 @@ export async function GET(req: Request) {
 
     const searchPattern = `%${q}%`;
 
-    const matchedUsers = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        username: users.username,
-        image: users.image,
-        bio: users.bio,
-        isVerified: users.isVerified,
-      })
-      .from(users)
-      .where(or(ilike(users.username, searchPattern), ilike(users.name, searchPattern)))
+    const { data: profiles, error } = await supabase
+      .from('profiles')
+      .select('id, username, name, image, bio, is_verified')
+      .or(`username.ilike.${searchPattern},name.ilike.${searchPattern}`)
       .limit(20);
 
-    if (matchedUsers.length === 0) {
+    if (error) throw error;
+    if (!profiles || profiles.length === 0) {
       return NextResponse.json({ users: [] });
     }
 
-    const userIds = matchedUsers.map((u) => u.id);
+    const profileIds = profiles.map((p) => p.id);
 
-    // Get follower counts and isFollowing status for each matched user
-    const { inArray } = await import('drizzle-orm');
-
-    const [followerCountRows, isFollowingRows] = await Promise.all([
-      db
-        .select({ followingId: follows.followingId, cnt: count() })
-        .from(follows)
-        .where(inArray(follows.followingId, userIds))
-        .groupBy(follows.followingId),
-      db
-        .select({ followingId: follows.followingId })
-        .from(follows)
-        .where(
-          and(
-            eq(follows.followerId, currentUserId),
-            inArray(follows.followingId, userIds)
-          )
-        ),
+    const [followerCountsRes, isFollowingRes] = await Promise.all([
+      supabase
+        .from('follows')
+        .select('following_id')
+        .in('following_id', profileIds),
+      supabase
+        .from('follows')
+        .select('following_id')
+        .eq('follower_id', user.id)
+        .in('following_id', profileIds),
     ]);
 
-    const followerCounts = Object.fromEntries(
-      followerCountRows.map((r) => [r.followingId, Number(r.cnt)])
-    );
-    const followingSet = new Set(isFollowingRows.map((r) => r.followingId));
+    const followerCountMap: Record<string, number> = {};
+    for (const f of followerCountsRes.data ?? []) {
+      followerCountMap[f.following_id] = (followerCountMap[f.following_id] ?? 0) + 1;
+    }
 
-    const enriched = matchedUsers.map((user) => ({
-      ...user,
-      followerCount: followerCounts[user.id] ?? 0,
-      isFollowing: followingSet.has(user.id),
+    const followingSet = new Set(isFollowingRes.data?.map((f) => f.following_id) ?? []);
+
+    const enriched = profiles.map((profile) => ({
+      ...profile,
+      _count: {
+        followers: followerCountMap[profile.id] ?? 0,
+      },
+      is_following: followingSet.has(profile.id),
     }));
 
     return NextResponse.json({ users: enriched });
   } catch (error) {
-    console.error('[users/search GET]', error);
+    console.error('GET /api/users/search error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

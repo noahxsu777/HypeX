@@ -1,127 +1,116 @@
-import { NextResponse } from 'next/server';
-import { eq, and, desc, count } from 'drizzle-orm';
-import { db } from '@/db';
-import { comments, users, likes, notifications, posts } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient, createAdminClient } from '@/lib/supabase/server';
 
 export async function GET(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: postId } = await params;
-    const userId = session.user.id;
 
-    const result = await db
-      .select({
-        comment: comments,
-        user: {
-          id: users.id,
-          name: users.name,
-          username: users.username,
-          image: users.image,
-          isVerified: users.isVerified,
-        },
-      })
-      .from(comments)
-      .leftJoin(users, eq(comments.userId, users.id))
-      .where(eq(comments.postId, postId))
-      .orderBy(desc(comments.createdAt));
+    const { data: commentsRaw, error } = await supabase
+      .from('comments')
+      .select('*, user:profiles(*)')
+      .eq('post_id', postId)
+      .order('created_at', { ascending: false });
 
-    // Enrich with like counts and user's like status
-    const commentIds = result.map((r) => r.comment.id);
-    let likedSet = new Set<string>();
-    let likeCounts: Record<string, number> = {};
+    if (error) throw error;
 
-    if (commentIds.length > 0) {
-      const { inArray } = await import('drizzle-orm');
+    const comments = (commentsRaw ?? []) as Array<{ id: string; [key: string]: unknown }>;
+    const commentIds = comments.map((c) => c.id);
 
-      const [userLikes, likeCountRows] = await Promise.all([
-        db
-          .select({ targetId: likes.targetId })
-          .from(likes)
-          .where(
-            and(
-              eq(likes.userId, userId),
-              inArray(likes.targetId, commentIds),
-              eq(likes.targetType, 'comment')
-            )
-          ),
-        db
-          .select({ targetId: likes.targetId, cnt: count() })
-          .from(likes)
-          .where(and(inArray(likes.targetId, commentIds), eq(likes.targetType, 'comment')))
-          .groupBy(likes.targetId),
-      ]);
-
-      likedSet = new Set(userLikes.map((l) => l.targetId));
-      likeCounts = Object.fromEntries(likeCountRows.map((r) => [r.targetId, Number(r.cnt)]));
+    if (commentIds.length === 0) {
+      return NextResponse.json({ comments: [] });
     }
 
-    const enriched = result.map(({ comment, user }) => ({
+    const [likeRes, likeCountsRes] = await Promise.all([
+      supabase
+        .from('likes')
+        .select('target_id')
+        .eq('user_id', user.id)
+        .eq('target_type', 'comment')
+        .in('target_id', commentIds),
+      supabase
+        .from('likes')
+        .select('target_id')
+        .eq('target_type', 'comment')
+        .in('target_id', commentIds),
+    ]);
+
+    const likedSet = new Set(likeRes.data?.map((l) => l.target_id) ?? []);
+
+    const likeCountMap: Record<string, number> = {};
+    for (const l of likeCountsRes.data ?? []) {
+      likeCountMap[l.target_id] = (likeCountMap[l.target_id] ?? 0) + 1;
+    }
+
+    const enriched = comments.map((comment) => ({
       ...comment,
-      user,
-      isLiked: likedSet.has(comment.id),
-      likeCount: likeCounts[comment.id] ?? 0,
+      is_liked: likedSet.has(comment.id),
+      _count: {
+        likes: likeCountMap[comment.id] ?? 0,
+      },
     }));
 
     return NextResponse.json({ comments: enriched });
   } catch (error) {
-    console.error('[posts/[id]/comments GET]', error);
+    console.error('GET /api/posts/[id]/comments error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function POST(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: postId } = await params;
-    const userId = session.user.id;
-    const body = await req.json();
-    const { content, parentId } = body;
+    const body = await request.json();
+    const { content, parent_id } = body;
 
     if (!content?.trim()) {
       return NextResponse.json({ error: 'Content is required' }, { status: 400 });
     }
 
-    const [newComment] = await db
-      .insert(comments)
-      .values({ userId, postId, content, parentId: parentId ?? null })
-      .returning();
+    const { data: commentRaw, error } = await supabase
+      .from('comments')
+      .insert({
+        user_id: user.id,
+        post_id: postId,
+        content,
+        parent_id: parent_id ?? null,
+      })
+      .select('*, user:profiles(*)')
+      .single();
+    const comment = commentRaw as (Record<string, unknown> & { id: string }) | null;
+    if (!comment) throw new Error('Failed to create comment');
 
-    // Get commenter info
-    const [commenter] = await db
-      .select({ id: users.id, name: users.name, username: users.username, image: users.image })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+    if (error) throw error;
 
     // Notify post owner
-    const postRows = await db
-      .select({ userId: posts.userId })
-      .from(posts)
-      .where(eq(posts.id, postId))
-      .limit(1);
+    const { data: post } = await supabase
+      .from('posts')
+      .select('user_id')
+      .eq('id', postId)
+      .single();
 
-    if (postRows.length > 0 && postRows[0].userId !== userId) {
-      await db.insert(notifications).values({
-        userId: postRows[0].userId,
-        actorId: userId,
+    const admin = await createAdminClient();
+
+    if (post && post.user_id !== user.id) {
+      await admin.from('notifications').insert({
+        user_id: post.user_id,
+        actor_id: user.id,
         type: 'comment',
-        targetId: postId,
-        targetType: 'post',
+        target_id: postId,
+        target_type: 'post',
       });
     }
 
@@ -129,26 +118,26 @@ export async function POST(
     const mentionMatches = content.match(/@(\w+)/g) ?? [];
     for (const mention of mentionMatches) {
       const mentionedUsername = mention.slice(1);
-      const mentionedUser = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.username, mentionedUsername))
-        .limit(1);
+      const { data: mentionedUser } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', mentionedUsername)
+        .maybeSingle();
 
-      if (mentionedUser.length > 0 && mentionedUser[0].id !== userId) {
-        await db.insert(notifications).values({
-          userId: mentionedUser[0].id,
-          actorId: userId,
+      if (mentionedUser && mentionedUser.id !== user.id) {
+        await admin.from('notifications').insert({
+          user_id: mentionedUser.id,
+          actor_id: user.id,
           type: 'mention',
-          targetId: newComment.id,
-          targetType: 'comment',
+          target_id: comment.id,
+          target_type: 'comment',
         });
       }
     }
 
-    return NextResponse.json({ ...newComment, user: commenter }, { status: 201 });
+    return NextResponse.json({ comment }, { status: 201 });
   } catch (error) {
-    console.error('[posts/[id]/comments POST]', error);
+    console.error('POST /api/posts/[id]/comments error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

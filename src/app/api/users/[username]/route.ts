@@ -1,77 +1,59 @@
-import { NextResponse } from 'next/server';
-import { eq, and, count } from 'drizzle-orm';
-import { db } from '@/db';
-import { users, follows, posts } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
 export async function GET(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { username } = await params;
-    const currentUserId = session.user.id;
 
-    const userRows = await db
-      .select()
-      .from(users)
-      .where(eq(users.username, username))
-      .limit(1);
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('username', username)
+      .single();
 
-    if (userRows.length === 0) {
+    if (error || !profile) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const user = userRows[0];
-
-    const [
-      [{ cnt: followerCount }],
-      [{ cnt: followingCount }],
-      [{ cnt: postCount }],
-      isFollowingRows,
-    ] = await Promise.all([
-      db
-        .select({ cnt: count() })
-        .from(follows)
-        .where(eq(follows.followingId, user.id)),
-      db
-        .select({ cnt: count() })
-        .from(follows)
-        .where(eq(follows.followerId, user.id)),
-      db
-        .select({ cnt: count() })
-        .from(posts)
-        .where(eq(posts.userId, user.id)),
-      db
-        .select()
-        .from(follows)
-        .where(
-          and(
-            eq(follows.followerId, currentUserId),
-            eq(follows.followingId, user.id)
-          )
-        )
-        .limit(1),
+    const [followerCountRes, followingCountRes, postCountRes, isFollowingRes] = await Promise.all([
+      supabase
+        .from('follows')
+        .select('*', { count: 'exact', head: true })
+        .eq('following_id', profile.id),
+      supabase
+        .from('follows')
+        .select('*', { count: 'exact', head: true })
+        .eq('follower_id', profile.id),
+      supabase
+        .from('posts')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', profile.id),
+      supabase
+        .from('follows')
+        .select('follower_id')
+        .eq('follower_id', user.id)
+        .eq('following_id', profile.id)
+        .maybeSingle(),
     ]);
 
-    const isFollowing = isFollowingRows.length > 0;
-
-    const { email, emailVerified, ...publicUser } = user;
-
     return NextResponse.json({
-      ...publicUser,
-      followerCount: Number(followerCount),
-      followingCount: Number(followingCount),
-      postCount: Number(postCount),
-      isFollowing,
+      ...profile,
+      _count: {
+        followers: followerCountRes.count ?? 0,
+        following: followingCountRes.count ?? 0,
+        posts: postCountRes.count ?? 0,
+      },
+      is_following: !!isFollowingRes.data,
     });
   } catch (error) {
-    console.error('[users/[username] GET]', error);
+    console.error('GET /api/users/[username] error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -1,9 +1,10 @@
-import { auth } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import EditProfilePage from '@/components/settings/EditProfilePage';
 
 export default async function EditProfile() {
-  const session = await auth();
-  if (!session) redirect('/login');
-  return <EditProfilePage user={session.user} />;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  return <EditProfilePage />;
 }

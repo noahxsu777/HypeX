@@ -1,46 +1,64 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Loader2, Camera } from 'lucide-react';
-import { useSession } from 'next-auth/react';
+import { createClient } from '@/lib/supabase/client';
 import TopBar from '@/components/layout/TopBar';
 import Avatar from '@/components/ui/Avatar';
 import ImageUploader from '@/components/ui/ImageUploader';
-import type { Session } from 'next-auth';
+import type { Profile } from '@/types';
 
 const schema = z.object({
   name: z.string().min(1, 'El nombre es requerido').max(50),
-  username: z.string().min(3).max(30).regex(/^[a-z0-9_.]+$/, 'Solo letras minúsculas, números, _ y .'),
+  username: z
+    .string()
+    .min(3)
+    .max(30)
+    .regex(/^[a-z0-9_.]+$/, 'Solo letras minúsculas, números, _ y .'),
   bio: z.string().max(150).optional(),
   website: z.string().url('URL inválida').optional().or(z.literal('')),
 });
 
 type FormData = z.infer<typeof schema>;
 
-interface Props {
-  user: Session['user'];
-}
-
-export default function EditProfilePage({ user }: Props) {
+export default function EditProfilePage() {
   const router = useRouter();
-  const { update } = useSession();
-  const [avatarUrl, setAvatarUrl] = useState(user?.image || '');
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      name: user?.name || '',
-      username: (user as any)?.username || '',
-      bio: '',
-      website: '',
-    },
   });
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            setProfile(data);
+            setAvatarUrl(data.image ?? '');
+            reset({
+              name: data.name ?? '',
+              username: data.username ?? '',
+              bio: data.bio ?? '',
+              website: data.website ?? '',
+            });
+          }
+        });
+    });
+  }, [reset]);
 
   const onSubmit = async (data: FormData) => {
     setIsSaving(true);
@@ -56,7 +74,6 @@ export default function EditProfilePage({ user }: Props) {
         setError(body.error || 'Error al guardar');
         return;
       }
-      await update();
       router.back();
     } finally {
       setIsSaving(false);
@@ -85,9 +102,13 @@ export default function EditProfilePage({ user }: Props) {
         {/* Avatar */}
         <div className="flex flex-col items-center py-4">
           <div className="relative">
-            <Avatar src={avatarUrl || user?.image} alt={user?.name || ''} size="2xl" />
+            <Avatar
+              src={avatarUrl || profile?.image}
+              alt={profile?.name ?? profile?.username ?? ''}
+              size="2xl"
+            />
             <ImageUploader
-              onUpload={url => setAvatarUrl(url)}
+              onUpload={(url) => setAvatarUrl(url)}
               folder="avatars"
               accept="image/*"
               className="absolute inset-0"
@@ -108,8 +129,18 @@ export default function EditProfilePage({ user }: Props) {
 
         {[
           { name: 'name' as const, label: 'Nombre', placeholder: 'Tu nombre completo' },
-          { name: 'username' as const, label: 'Nombre de usuario', placeholder: 'username', prefix: '@' },
-          { name: 'bio' as const, label: 'Biografía', placeholder: 'Cuéntanos sobre ti...', multiline: true },
+          {
+            name: 'username' as const,
+            label: 'Nombre de usuario',
+            placeholder: 'username',
+            prefix: '@',
+          },
+          {
+            name: 'bio' as const,
+            label: 'Biografía',
+            placeholder: 'Cuéntanos sobre ti...',
+            multiline: true,
+          },
           { name: 'website' as const, label: 'Sitio web', placeholder: 'https://tu-sitio.com' },
         ].map(({ name, label, placeholder, prefix, multiline }) => (
           <div key={name}>

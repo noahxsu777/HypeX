@@ -1,43 +1,43 @@
-import { NextResponse } from 'next/server';
-import { eq, and } from 'drizzle-orm';
-import { db } from '@/db';
-import { savedPosts } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
 export async function POST(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: postId } = await params;
-    const userId = session.user.id;
 
-    const existing = await db
-      .select()
-      .from(savedPosts)
-      .where(and(eq(savedPosts.userId, userId), eq(savedPosts.postId, postId)))
-      .limit(1);
+    const { data: existing } = await supabase
+      .from('saved_posts')
+      .select('post_id')
+      .eq('user_id', user.id)
+      .eq('post_id', postId)
+      .maybeSingle();
 
     let saved: boolean;
 
-    if (existing.length > 0) {
-      await db
-        .delete(savedPosts)
-        .where(and(eq(savedPosts.userId, userId), eq(savedPosts.postId, postId)));
+    if (existing) {
+      await supabase
+        .from('saved_posts')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('post_id', postId);
       saved = false;
     } else {
-      await db.insert(savedPosts).values({ userId, postId });
+      await supabase
+        .from('saved_posts')
+        .insert({ user_id: user.id, post_id: postId });
       saved = true;
     }
 
     return NextResponse.json({ saved });
   } catch (error) {
-    console.error('[posts/[id]/save POST]', error);
+    console.error('POST /api/posts/[id]/save error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

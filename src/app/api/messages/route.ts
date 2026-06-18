@@ -1,192 +1,157 @@
-import { NextResponse } from 'next/server';
-import { eq, and, desc, sql, count } from 'drizzle-orm';
-import { db } from '@/db';
-import {
-  conversations,
-  conversationParticipants,
-  messages,
-  users,
-} from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
-export async function GET(req: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
+    // Get conversation IDs this user participates in
+    const { data: participations } = await supabase
+      .from('conversation_participants')
+      .select('conversation_id')
+      .eq('user_id', user.id);
 
-    // Get conversations the user participates in
-    const userConvs = await db
-      .select({ conversationId: conversationParticipants.conversationId })
-      .from(conversationParticipants)
-      .where(eq(conversationParticipants.userId, userId));
-
-    const convIds = userConvs.map((r) => r.conversationId);
+    const convIds = participations?.map((p) => p.conversation_id) ?? [];
 
     if (convIds.length === 0) {
       return NextResponse.json({ conversations: [] });
     }
 
-    const { inArray } = await import('drizzle-orm');
+    // Get conversations ordered by updated_at
+    const { data: conversations, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .in('id', convIds)
+      .order('updated_at', { ascending: false });
 
-    // Get conversations with last message
-    const convRows = await db
-      .select()
-      .from(conversations)
-      .where(inArray(conversations.id, convIds))
-      .orderBy(desc(conversations.updatedAt));
+    if (error) throw error;
 
-    // For each conversation, get last message and participants
+    // Enrich each conversation with participants, last message, unread count
     const enriched = await Promise.all(
-      convRows.map(async (conv) => {
-        const [lastMessage] = await db
-          .select({
-            message: messages,
-            sender: {
-              id: users.id,
-              name: users.name,
-              username: users.username,
-              image: users.image,
-            },
-          })
-          .from(messages)
-          .leftJoin(users, eq(messages.senderId, users.id))
-          .where(eq(messages.conversationId, conv.id))
-          .orderBy(desc(messages.createdAt))
-          .limit(1);
+      conversations.map(async (conv) => {
+        const [participantsRes, lastMessageRes, unreadRes] = await Promise.all([
+          supabase
+            .from('conversation_participants')
+            .select('user:profiles(*)')
+            .eq('conversation_id', conv.id),
+          supabase
+            .from('messages')
+            .select('*, sender:profiles(*)')
+            .eq('conversation_id', conv.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('conversation_id', conv.id)
+            .eq('is_read', false)
+            .neq('sender_id', user.id),
+        ]);
 
-        const [{ cnt: unreadCount }] = await db
-          .select({ cnt: count() })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.conversationId, conv.id),
-              eq(messages.isRead, false),
-              sql`${messages.senderId} != ${userId}`
-            )
-          );
-
-        const participants = await db
-          .select({
-            user: {
-              id: users.id,
-              name: users.name,
-              username: users.username,
-              image: users.image,
-              isVerified: users.isVerified,
-            },
-          })
-          .from(conversationParticipants)
-          .leftJoin(users, eq(conversationParticipants.userId, users.id))
-          .where(eq(conversationParticipants.conversationId, conv.id));
-
+        const participants = (participantsRes.data as Array<{ user: unknown }> | null)?.map((p) => p.user) ?? [];
         return {
           ...conv,
-          lastMessage: lastMessage ?? null,
-          unreadCount: Number(unreadCount),
-          participants: participants.map((p) => p.user),
+          participants,
+          last_message: lastMessageRes.data ?? null,
+          unread_count: unreadRes.count ?? 0,
         };
       })
     );
 
     return NextResponse.json({ conversations: enriched });
   } catch (error) {
-    console.error('[messages GET]', error);
+    console.error('GET /api/messages error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
-    const body = await req.json();
-    const { participantId, participantIds, groupName } = body;
+    const body = await request.json();
+    const { participant_id, participant_ids, group_name } = body;
 
-    const isGroup = !!groupName && Array.isArray(participantIds) && participantIds.length > 1;
+    const isGroup = !!group_name && Array.isArray(participant_ids) && participant_ids.length > 1;
 
     if (!isGroup) {
       // 1-on-1: check if conversation already exists
-      const targetId = participantId as string;
+      const targetId = participant_id as string;
       if (!targetId) {
-        return NextResponse.json({ error: 'participantId is required' }, { status: 400 });
+        return NextResponse.json({ error: 'participant_id is required' }, { status: 400 });
       }
 
-      // Find existing 1-on-1 conversation between userId and targetId
-      const myConvs = await db
-        .select({ conversationId: conversationParticipants.conversationId })
-        .from(conversationParticipants)
-        .where(eq(conversationParticipants.userId, userId));
+      // Find my conversations
+      const { data: myParticipations } = await supabase
+        .from('conversation_participants')
+        .select('conversation_id')
+        .eq('user_id', user.id);
 
-      const myConvIds = myConvs.map((r) => r.conversationId);
+      const myConvIds = myParticipations?.map((p) => p.conversation_id) ?? [];
 
       if (myConvIds.length > 0) {
-        const { inArray } = await import('drizzle-orm');
+        // Find a conversation where the target is also a participant and it's not a group
+        const { data: sharedRaw } = await supabase
+          .from('conversation_participants')
+          .select('conversation_id, conversation:conversations!inner(is_group)')
+          .eq('user_id', targetId)
+          .in('conversation_id', myConvIds)
+          .eq('conversation.is_group', false)
+          .limit(1)
+          .maybeSingle();
 
-        // Find conversation where target is also a participant and it's not a group
-        const shared = await db
-          .select({ conversationId: conversationParticipants.conversationId })
-          .from(conversationParticipants)
-          .leftJoin(
-            conversations,
-            eq(conversationParticipants.conversationId, conversations.id)
-          )
-          .where(
-            and(
-              eq(conversationParticipants.userId, targetId),
-              inArray(conversationParticipants.conversationId, myConvIds),
-              eq(conversations.isGroup, false)
-            )
-          )
-          .limit(1);
-
-        if (shared.length > 0) {
-          return NextResponse.json({ conversationId: shared[0].conversationId });
+        const shared = sharedRaw as { conversation_id: string } | null;
+        if (shared) {
+          return NextResponse.json({ conversation_id: shared.conversation_id });
         }
       }
 
       // Create new 1-on-1 conversation
-      const [newConv] = await db
-        .insert(conversations)
-        .values({ isGroup: false })
-        .returning();
+      const { data: newConv, error: convError } = await supabase
+        .from('conversations')
+        .insert({ is_group: false })
+        .select()
+        .single();
 
-      await db.insert(conversationParticipants).values([
-        { conversationId: newConv.id, userId },
-        { conversationId: newConv.id, userId: targetId },
+      if (convError) throw convError;
+
+      await supabase.from('conversation_participants').insert([
+        { conversation_id: newConv.id, user_id: user.id },
+        { conversation_id: newConv.id, user_id: targetId },
       ]);
 
-      return NextResponse.json({ conversationId: newConv.id }, { status: 201 });
+      return NextResponse.json({ conversation_id: newConv.id }, { status: 201 });
     } else {
       // Group conversation
-      const allParticipantIds = Array.isArray(participantIds) ? participantIds : [];
-      if (!allParticipantIds.includes(userId)) {
-        allParticipantIds.push(userId);
+      const allParticipantIds: string[] = Array.isArray(participant_ids) ? [...participant_ids] : [];
+      if (!allParticipantIds.includes(user.id)) {
+        allParticipantIds.push(user.id);
       }
 
-      const [newConv] = await db
-        .insert(conversations)
-        .values({ isGroup: true, groupName })
-        .returning();
+      const { data: newConv, error: convError } = await supabase
+        .from('conversations')
+        .insert({ is_group: true, group_name })
+        .select()
+        .single();
 
-      await db.insert(conversationParticipants).values(
-        allParticipantIds.map((pid: string) => ({
-          conversationId: newConv.id,
-          userId: pid,
+      if (convError) throw convError;
+
+      await supabase.from('conversation_participants').insert(
+        allParticipantIds.map((pid) => ({
+          conversation_id: newConv.id,
+          user_id: pid,
         }))
       );
 
-      return NextResponse.json({ conversationId: newConv.id }, { status: 201 });
+      return NextResponse.json({ conversation_id: newConv.id }, { status: 201 });
     }
   } catch (error) {
-    console.error('[messages POST]', error);
+    console.error('POST /api/messages error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -1,65 +1,64 @@
-import { NextResponse } from 'next/server';
-import { eq, and, count } from 'drizzle-orm';
-import { db } from '@/db';
-import { likes, reels, notifications } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient, createAdminClient } from '@/lib/supabase/server';
 
 export async function POST(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: reelId } = await params;
-    const userId = session.user.id;
 
-    const existing = await db
-      .select()
-      .from(likes)
-      .where(and(eq(likes.userId, userId), eq(likes.targetId, reelId), eq(likes.targetType, 'reel')))
-      .limit(1);
+    const { data: existing } = await supabase
+      .from('likes')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('target_id', reelId)
+      .eq('target_type', 'reel')
+      .maybeSingle();
 
     let liked: boolean;
 
-    if (existing.length > 0) {
-      await db
-        .delete(likes)
-        .where(and(eq(likes.userId, userId), eq(likes.targetId, reelId), eq(likes.targetType, 'reel')));
+    if (existing) {
+      await supabase.from('likes').delete().eq('id', existing.id);
       liked = false;
     } else {
-      await db.insert(likes).values({ userId, targetId: reelId, targetType: 'reel' });
+      await supabase
+        .from('likes')
+        .insert({ user_id: user.id, target_id: reelId, target_type: 'reel' });
       liked = true;
 
-      // Notify reel owner
-      const reelRows = await db
-        .select({ userId: reels.userId })
-        .from(reels)
-        .where(eq(reels.id, reelId))
-        .limit(1);
+      // Insert notification for reel owner (skip if liking own reel)
+      const { data: reel } = await supabase
+        .from('reels')
+        .select('user_id')
+        .eq('id', reelId)
+        .single();
 
-      if (reelRows.length > 0 && reelRows[0].userId !== userId) {
-        await db.insert(notifications).values({
-          userId: reelRows[0].userId,
-          actorId: userId,
+      if (reel && reel.user_id !== user.id) {
+        const admin = await createAdminClient();
+        await admin.from('notifications').insert({
+          user_id: reel.user_id,
+          actor_id: user.id,
           type: 'like',
-          targetId: reelId,
-          targetType: 'reel',
+          target_id: reelId,
+          target_type: 'reel',
         });
       }
     }
 
-    const [{ cnt }] = await db
-      .select({ cnt: count() })
-      .from(likes)
-      .where(and(eq(likes.targetId, reelId), eq(likes.targetType, 'reel')));
+    const { count } = await supabase
+      .from('likes')
+      .select('*', { count: 'exact', head: true })
+      .eq('target_id', reelId)
+      .eq('target_type', 'reel');
 
-    return NextResponse.json({ liked, count: Number(cnt) });
+    return NextResponse.json({ liked, count: count ?? 0 });
   } catch (error) {
-    console.error('[reels/[id]/like POST]', error);
+    console.error('POST /api/reels/[id]/like error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

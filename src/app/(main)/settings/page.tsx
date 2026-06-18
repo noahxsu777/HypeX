@@ -1,9 +1,10 @@
-import { auth } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import SettingsPage from '@/components/settings/SettingsPage';
 
 export default async function Settings() {
-  const session = await auth();
-  if (!session) redirect('/login');
-  return <SettingsPage user={session.user} />;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  return <SettingsPage />;
 }

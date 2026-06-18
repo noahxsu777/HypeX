@@ -1,111 +1,101 @@
-import { NextResponse } from 'next/server';
-import { eq, and, count } from 'drizzle-orm';
-import { db } from '@/db';
-import { posts, users, likes, savedPosts, comments } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
 export async function GET(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const userId = session.user.id;
 
-    const result = await db
-      .select({
-        post: posts,
-        user: {
-          id: users.id,
-          name: users.name,
-          username: users.username,
-          image: users.image,
-          isVerified: users.isVerified,
-        },
-      })
-      .from(posts)
-      .leftJoin(users, eq(posts.userId, users.id))
-      .where(eq(posts.id, id))
-      .limit(1);
+    const { data: postRaw, error } = await supabase
+      .from('posts')
+      .select('*, user:profiles(*)')
+      .eq('id', id)
+      .single();
 
-    if (result.length === 0) {
+    const post = postRaw as Record<string, unknown> | null;
+    if (error || !post) {
       return NextResponse.json({ error: 'Post not found' }, { status: 404 });
     }
 
-    const { post, user } = result[0];
-
-    const [userLike, userSave, [likeCountRow], [commentCountRow]] = await Promise.all([
-      db
-        .select()
-        .from(likes)
-        .where(and(eq(likes.userId, userId), eq(likes.targetId, id), eq(likes.targetType, 'post')))
-        .limit(1),
-      db
-        .select()
-        .from(savedPosts)
-        .where(and(eq(savedPosts.userId, userId), eq(savedPosts.postId, id)))
-        .limit(1),
-      db
-        .select({ cnt: count() })
-        .from(likes)
-        .where(and(eq(likes.targetId, id), eq(likes.targetType, 'post'))),
-      db
-        .select({ cnt: count() })
-        .from(comments)
-        .where(eq(comments.postId, id)),
+    const [likeRes, savedRes, likeCountRes, commentCountRes] = await Promise.all([
+      supabase
+        .from('likes')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('target_id', id)
+        .eq('target_type', 'post')
+        .maybeSingle(),
+      supabase
+        .from('saved_posts')
+        .select('post_id')
+        .eq('user_id', user.id)
+        .eq('post_id', id)
+        .maybeSingle(),
+      supabase
+        .from('likes')
+        .select('*', { count: 'exact', head: true })
+        .eq('target_id', id)
+        .eq('target_type', 'post'),
+      supabase
+        .from('comments')
+        .select('*', { count: 'exact', head: true })
+        .eq('post_id', id),
     ]);
 
     return NextResponse.json({
-      ...post,
-      user,
-      isLiked: userLike.length > 0,
-      isSaved: userSave.length > 0,
-      likeCount: Number(likeCountRow?.cnt ?? 0),
-      commentCount: Number(commentCountRow?.cnt ?? 0),
+      post: {
+        ...post,
+        is_liked: !!likeRes.data,
+        is_saved: !!savedRes.data,
+        _count: {
+          likes: likeCountRes.count ?? 0,
+          comments: commentCountRes.count ?? 0,
+        },
+      },
     });
   } catch (error) {
-    console.error('[posts/[id] GET]', error);
+    console.error('GET /api/posts/[id] error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function DELETE(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id } = await params;
-    const userId = session.user.id;
 
-    const existing = await db
-      .select({ userId: posts.userId })
-      .from(posts)
-      .where(eq(posts.id, id))
-      .limit(1);
+    const { data: post, error: fetchError } = await supabase
+      .from('posts')
+      .select('id, user_id')
+      .eq('id', id)
+      .single();
 
-    if (existing.length === 0) {
+    if (fetchError || !post) {
       return NextResponse.json({ error: 'Post not found' }, { status: 404 });
     }
 
-    if (existing[0].userId !== userId) {
+    if (post.user_id !== user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    await db.delete(posts).where(eq(posts.id, id));
+    const { error } = await supabase.from('posts').delete().eq('id', id);
+    if (error) throw error;
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[posts/[id] DELETE]', error);
+    console.error('DELETE /api/posts/[id] error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

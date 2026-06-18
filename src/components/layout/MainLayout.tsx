@@ -2,14 +2,14 @@
 
 import { usePathname } from 'next/navigation';
 import BottomNav from './BottomNav';
-import type { Session } from 'next-auth';
 
 interface Props {
   children: React.ReactNode;
-  user: Session['user'];
+  currentUserId: string;
+  currentUserImage: string | null;
 }
 
-export default function MainLayout({ children, user }: Props) {
+export default function MainLayout({ children, currentUserId, currentUserImage }: Props) {
   const pathname = usePathname();
   const isFullscreen = pathname === '/reels';
   const hideNav = pathname === '/create' || pathname.startsWith('/messages/');
@@ -19,7 +19,7 @@ export default function MainLayout({ children, user }: Props) {
       <main className={isFullscreen ? '' : 'pb-16'}>
         {children}
       </main>
-      {!hideNav && <BottomNav user={user} />}
+      {!hideNav && <BottomNav />}
     </div>
   );
 }

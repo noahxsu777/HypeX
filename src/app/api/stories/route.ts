@@ -1,97 +1,83 @@
-import { NextResponse } from 'next/server';
-import { eq, and, gt, inArray } from 'drizzle-orm';
-import { db } from '@/db';
-import { stories, users, follows } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
-export async function GET(req: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const userId = session.user.id;
-    const now = new Date();
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     // Get IDs of followed users
-    const followingRows = await db
-      .select({ followingId: follows.followingId })
-      .from(follows)
-      .where(eq(follows.followerId, userId));
+    const { data: following } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', user.id);
 
-    const feedUserIds = [...followingRows.map((r) => r.followingId), userId];
+    const followingIds = following?.map((f) => f.following_id) ?? [];
+    const feedIds = [...followingIds, user.id];
 
-    const activeStories = await db
-      .select({
-        story: stories,
-        user: {
-          id: users.id,
-          name: users.name,
-          username: users.username,
-          image: users.image,
-          isVerified: users.isVerified,
-        },
-      })
-      .from(stories)
-      .leftJoin(users, eq(stories.userId, users.id))
-      .where(
-        and(
-          inArray(stories.userId, feedUserIds),
-          gt(stories.expiresAt, now)
-        )
-      )
-      .orderBy(stories.createdAt);
+    const now = new Date().toISOString();
+
+    const { data: storiesRaw, error } = await supabase
+      .from('stories')
+      .select('*, user:profiles(*)')
+      .in('user_id', feedIds)
+      .gt('expires_at', now)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    type StoryRow = { user_id: string; user: unknown; [key: string]: unknown };
+    const stories = (storiesRaw ?? []) as StoryRow[];
 
     // Group by user
-    const grouped: Record<
-      string,
-      { user: typeof activeStories[0]['user']; stories: typeof activeStories[0]['story'][] }
-    > = {};
+    const grouped: Record<string, { user: unknown; stories: unknown[] }> = {};
 
-    for (const { story, user } of activeStories) {
-      const uid = user?.id ?? story.userId;
+    for (const story of stories) {
+      const uid = story.user_id;
       if (!grouped[uid]) {
-        grouped[uid] = { user, stories: [] };
+        grouped[uid] = { user: story.user, stories: [] };
       }
-      grouped[uid].stories.push(story);
+      const { user: _user, ...storyWithoutUser } = story;
+      grouped[uid].stories.push(storyWithoutUser);
     }
 
     return NextResponse.json({ stories: Object.values(grouped) });
   } catch (error) {
-    console.error('[stories GET]', error);
+    console.error('GET /api/stories error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const body = await request.json();
+    const { media_url, media_type, duration } = body;
+
+    if (!media_url || !media_type) {
+      return NextResponse.json({ error: 'media_url and media_type are required' }, { status: 400 });
     }
 
-    const userId = session.user.id;
-    const body = await req.json();
-    const { mediaUrl, mediaType, duration } = body;
-
-    if (!mediaUrl || !mediaType) {
-      return NextResponse.json({ error: 'mediaUrl and mediaType are required' }, { status: 400 });
-    }
-
-    const [newStory] = await db
-      .insert(stories)
-      .values({
-        userId,
-        mediaUrl,
-        mediaType,
+    const { data: storyRaw, error } = await supabase
+      .from('stories')
+      .insert({
+        user_id: user.id,
+        media_url,
+        media_type,
         duration: duration ?? 5000,
       })
-      .returning();
+      .select('*, user:profiles(*)')
+      .single();
 
-    return NextResponse.json(newStory, { status: 201 });
+    if (error) throw error;
+
+    return NextResponse.json({ story: storyRaw }, { status: 201 });
   } catch (error) {
-    console.error('[stories POST]', error);
+    console.error('POST /api/stories error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

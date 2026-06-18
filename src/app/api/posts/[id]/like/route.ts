@@ -1,65 +1,64 @@
-import { NextResponse } from 'next/server';
-import { eq, and, count } from 'drizzle-orm';
-import { db } from '@/db';
-import { likes, posts, notifications } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient, createAdminClient } from '@/lib/supabase/server';
 
 export async function POST(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: postId } = await params;
-    const userId = session.user.id;
 
-    const existing = await db
-      .select()
-      .from(likes)
-      .where(and(eq(likes.userId, userId), eq(likes.targetId, postId), eq(likes.targetType, 'post')))
-      .limit(1);
+    const { data: existing } = await supabase
+      .from('likes')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('target_id', postId)
+      .eq('target_type', 'post')
+      .maybeSingle();
 
     let liked: boolean;
 
-    if (existing.length > 0) {
-      await db
-        .delete(likes)
-        .where(and(eq(likes.userId, userId), eq(likes.targetId, postId), eq(likes.targetType, 'post')));
+    if (existing) {
+      await supabase.from('likes').delete().eq('id', existing.id);
       liked = false;
     } else {
-      await db.insert(likes).values({ userId, targetId: postId, targetType: 'post' });
+      await supabase
+        .from('likes')
+        .insert({ user_id: user.id, target_id: postId, target_type: 'post' });
       liked = true;
 
-      // Create notification for post owner (skip if liking own post)
-      const postRows = await db
-        .select({ userId: posts.userId })
-        .from(posts)
-        .where(eq(posts.id, postId))
-        .limit(1);
+      // Insert notification for post owner (skip if liking own post)
+      const { data: post } = await supabase
+        .from('posts')
+        .select('user_id')
+        .eq('id', postId)
+        .single();
 
-      if (postRows.length > 0 && postRows[0].userId !== userId) {
-        await db.insert(notifications).values({
-          userId: postRows[0].userId,
-          actorId: userId,
+      if (post && post.user_id !== user.id) {
+        const admin = await createAdminClient();
+        await admin.from('notifications').insert({
+          user_id: post.user_id,
+          actor_id: user.id,
           type: 'like',
-          targetId: postId,
-          targetType: 'post',
+          target_id: postId,
+          target_type: 'post',
         });
       }
     }
 
-    const [{ cnt }] = await db
-      .select({ cnt: count() })
-      .from(likes)
-      .where(and(eq(likes.targetId, postId), eq(likes.targetType, 'post')));
+    const { count } = await supabase
+      .from('likes')
+      .select('*', { count: 'exact', head: true })
+      .eq('target_id', postId)
+      .eq('target_type', 'post');
 
-    return NextResponse.json({ liked, count: Number(cnt) });
+    return NextResponse.json({ liked, count: count ?? 0 });
   } catch (error) {
-    console.error('[posts/[id]/like POST]', error);
+    console.error('POST /api/posts/[id]/like error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

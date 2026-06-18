@@ -12,8 +12,7 @@ import {
   ChevronRight,
   BadgeCheck,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { timeAgo, formatCount } from '@/lib/utils';
+import { cn, timeAgo, formatCount } from '@/lib/utils';
 import type { Post } from '@/types';
 import Avatar from '@/components/ui/Avatar';
 import VideoPlayer from '@/components/ui/VideoPlayer';
@@ -21,15 +20,13 @@ import CommentsSheet from './CommentsSheet';
 
 interface PostCardProps {
   post: Post;
-  /** Optional current user id – unused but accepted for compat with HomeFeed */
-  currentUserId?: string;
+  currentUserId: string;
 }
 
 function Caption({ username, text }: { username: string; text: string }) {
   const [expanded, setExpanded] = useState(false);
   const shouldTruncate = text.length > 120 && !expanded;
   const display = shouldTruncate ? text.slice(0, 120) + '…' : text;
-
   const parts = display.split(/(#\w+)/g);
 
   return (
@@ -66,18 +63,17 @@ function Caption({ username, text }: { username: string; text: string }) {
   );
 }
 
-export default function PostCard({ post }: PostCardProps) {
+export default function PostCard({ post, currentUserId }: PostCardProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [liked, setLiked] = useState(post.isLiked ?? false);
+  const [liked, setLiked] = useState(post.is_liked ?? false);
   const [likeCount, setLikeCount] = useState(post._count?.likes ?? 0);
-  const [saved, setSaved] = useState(post.isSaved ?? false);
+  const [saved, setSaved] = useState(post.is_saved ?? false);
   const [showHeart, setShowHeart] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const heartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTapRef = useRef(0);
-  const mutingRef = useRef(false);
 
-  const mediaUrls = post.mediaUrls ?? [];
+  const mediaUrls = post.media_urls ?? [];
   const isCarousel = mediaUrls.length > 1;
 
   const doLike = useCallback(async () => {
@@ -87,7 +83,6 @@ export default function PostCard({ post }: PostCardProps) {
     try {
       await fetch(`/api/posts/${post.id}/like`, { method: 'POST' });
     } catch {
-      // revert on error
       setLiked(!next);
       setLikeCount((c) => (next ? Math.max(0, c - 1) : c + 1));
     }
@@ -98,9 +93,7 @@ export default function PostCard({ post }: PostCardProps) {
       const now = Date.now();
       if (now - lastTapRef.current < 350) {
         e.preventDefault();
-        if (!liked) {
-          doLike();
-        }
+        if (!liked) doLike();
         setShowHeart(true);
         if (heartTimerRef.current) clearTimeout(heartTimerRef.current);
         heartTimerRef.current = setTimeout(() => setShowHeart(false), 700);
@@ -130,7 +123,7 @@ export default function PostCard({ post }: PostCardProps) {
         <Link href={`/profile/${post.user.username}`}>
           <Avatar
             src={post.user.image}
-            alt={post.user.name}
+            alt={post.user.name ?? post.user.username ?? ''}
             size="md"
             hasStory
             storyViewed={false}
@@ -144,7 +137,7 @@ export default function PostCard({ post }: PostCardProps) {
             >
               {post.user.username}
             </Link>
-            {post.user.isVerified && (
+            {post.user.is_verified && (
               <BadgeCheck size={14} className="text-blue-500 flex-shrink-0" />
             )}
           </div>
@@ -216,7 +209,6 @@ export default function PostCard({ post }: PostCardProps) {
                 <ChevronRight size={20} />
               </button>
             )}
-            {/* Dot indicators */}
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1">
               {mediaUrls.map((_, i) => (
                 <div
@@ -255,10 +247,7 @@ export default function PostCard({ post }: PostCardProps) {
           )}
           aria-label={liked ? 'Quitar me gusta' : 'Me gusta'}
         >
-          <Heart
-            size={26}
-            className={cn(liked && 'fill-red-500')}
-          />
+          <Heart size={26} className={cn(liked && 'fill-red-500')} />
         </button>
         <button
           type="button"
@@ -279,16 +268,10 @@ export default function PostCard({ post }: PostCardProps) {
         <button
           type="button"
           onClick={handleSave}
-          className={cn(
-            'transition-transform active:scale-90',
-            saved ? 'text-gray-900 dark:text-white' : 'text-gray-900 dark:text-white'
-          )}
+          className="text-gray-900 dark:text-white transition-transform active:scale-90"
           aria-label={saved ? 'Quitar guardado' : 'Guardar'}
         >
-          <Bookmark
-            size={26}
-            className={cn(saved && 'fill-current')}
-          />
+          <Bookmark size={26} className={cn(saved && 'fill-current')} />
         </button>
       </div>
 
@@ -304,7 +287,7 @@ export default function PostCard({ post }: PostCardProps) {
       {/* Caption */}
       {post.caption && (
         <div className="px-3 pb-1">
-          <Caption username={post.user.username} text={post.caption} />
+          <Caption username={post.user.username ?? ''} text={post.caption} />
         </div>
       )}
 
@@ -324,13 +307,13 @@ export default function PostCard({ post }: PostCardProps) {
       {/* Timestamp */}
       <div className="px-3 pb-3">
         <span className="text-[11px] text-gray-400 dark:text-gray-500 uppercase tracking-wide">
-          {timeAgo(post.createdAt)}
+          {timeAgo(post.created_at)}
         </span>
       </div>
 
-      {/* Comments sheet */}
       <CommentsSheet
         postId={post.id}
+        currentUserId={currentUserId}
         isOpen={commentsOpen}
         onClose={() => setCommentsOpen(false)}
       />

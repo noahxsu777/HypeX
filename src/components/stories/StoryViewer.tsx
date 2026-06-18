@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import { X, Send } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useSession } from 'next-auth/react';
+import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 import type { Story } from '@/types';
 import Avatar from '@/components/ui/Avatar';
@@ -18,16 +18,29 @@ interface StoryViewerProps {
 }
 
 export default function StoryViewer({ stories, initialIndex, onClose }: StoryViewerProps) {
-  const { data: session } = useSession();
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [paused, setPaused] = useState(false);
   const [showReply, setShowReply] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
-  const progressRef = useRef<HTMLDivElement | null>(null);
+  const [userImage, setUserImage] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startTimeRef = useRef<number>(Date.now());
   const elapsedRef = useRef<number>(0);
+  const startTimeRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        supabase
+          .from('profiles')
+          .select('image')
+          .eq('id', user.id)
+          .single()
+          .then(({ data }) => setUserImage(data?.image ?? null));
+      }
+    });
+  }, []);
 
   const story = stories[currentIndex];
   const duration = (story?.duration ?? STORY_DURATION_MS / 1000) * 1000;
@@ -48,7 +61,6 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
     }
   }, [currentIndex]);
 
-  // Auto-advance timer
   useEffect(() => {
     if (paused || showReply) return;
     elapsedRef.current = 0;
@@ -64,13 +76,11 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
     };
   }, [currentIndex, paused, showReply, duration, goNext]);
 
-  // Mark as viewed
   useEffect(() => {
     if (!story) return;
     fetch(`/api/stories/${story.id}/view`, { method: 'POST' }).catch(() => {});
   }, [story]);
 
-  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -133,10 +143,8 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
               className="flex-1 h-0.5 bg-white/30 rounded-full overflow-hidden"
             >
               {i < currentIndex ? (
-                // Fully filled for past stories
                 <div className="h-full w-full bg-white" />
               ) : i === currentIndex ? (
-                // Animating for current story
                 <div
                   key={`prog-${currentIndex}`}
                   className={cn(
@@ -154,12 +162,13 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
         </div>
 
         {/* Header */}
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-3 px-4 pt-safe"
+        <div
+          className="absolute top-0 left-0 right-0 z-10 flex items-center gap-3 px-4 pt-safe"
           style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 20px)' }}
         >
           <Avatar
             src={story.user.image}
-            alt={story.user.name}
+            alt={story.user.name ?? story.user.username ?? ''}
             size="sm"
           />
           <div className="flex-1 min-w-0">
@@ -177,7 +186,7 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
           </button>
         </div>
 
-        {/* Story media — tap to navigate */}
+        {/* Story media */}
         <div
           className="absolute inset-0 flex items-center justify-center"
           onClick={handleTap}
@@ -185,9 +194,9 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
           onPointerUp={() => setPaused(false)}
           onPointerLeave={() => setPaused(false)}
         >
-          {story.mediaType === 'video' ? (
+          {story.media_type === 'video' ? (
             <VideoPlayer
-              src={story.mediaUrl}
+              src={story.media_url}
               autoPlay
               muted={false}
               loop={false}
@@ -195,7 +204,7 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
             />
           ) : (
             <Image
-              src={story.mediaUrl}
+              src={story.media_url}
               alt={`Historia de ${story.user.name}`}
               fill
               sizes="100vw"
@@ -205,7 +214,7 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
           )}
         </div>
 
-        {/* Swipe up / reply area */}
+        {/* Reply area */}
         <div className="absolute bottom-0 left-0 right-0 z-10 pb-safe">
           <AnimatePresence mode="wait">
             {showReply ? (
@@ -219,8 +228,8 @@ export default function StoryViewer({ stories, initialIndex, onClose }: StoryVie
                 onClick={(e) => e.stopPropagation()}
               >
                 <Avatar
-                  src={session?.user?.image}
-                  alt={session?.user?.name ?? 'Yo'}
+                  src={userImage}
+                  alt="Yo"
                   size="sm"
                   className="flex-shrink-0"
                 />

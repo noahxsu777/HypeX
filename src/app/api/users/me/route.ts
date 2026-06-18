@@ -1,95 +1,99 @@
-import { NextResponse } from 'next/server';
-import { eq, count } from 'drizzle-orm';
-import { db } from '@/db';
-import { users, follows, posts } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
-export async function GET(req: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (error || !profile) {
+      return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
     }
 
-    const userId = session.user.id;
-
-    const userRows = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-
-    if (userRows.length === 0) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    const user = userRows[0];
-
-    const [
-      [{ cnt: followerCount }],
-      [{ cnt: followingCount }],
-      [{ cnt: postCount }],
-    ] = await Promise.all([
-      db.select({ cnt: count() }).from(follows).where(eq(follows.followingId, userId)),
-      db.select({ cnt: count() }).from(follows).where(eq(follows.followerId, userId)),
-      db.select({ cnt: count() }).from(posts).where(eq(posts.userId, userId)),
+    const [followerCountRes, followingCountRes, postCountRes] = await Promise.all([
+      supabase
+        .from('follows')
+        .select('*', { count: 'exact', head: true })
+        .eq('following_id', user.id),
+      supabase
+        .from('follows')
+        .select('*', { count: 'exact', head: true })
+        .eq('follower_id', user.id),
+      supabase
+        .from('posts')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id),
     ]);
 
     return NextResponse.json({
-      ...user,
-      followerCount: Number(followerCount),
-      followingCount: Number(followingCount),
-      postCount: Number(postCount),
+      ...profile,
+      _count: {
+        followers: followerCountRes.count ?? 0,
+        following: followingCountRes.count ?? 0,
+        posts: postCountRes.count ?? 0,
+      },
     });
   } catch (error) {
-    console.error('[users/me GET]', error);
+    console.error('GET /api/users/me error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function PATCH(req: Request) {
+export async function PATCH(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
-    const body = await req.json();
+    const body = await request.json();
     const { name, username, bio, website, image } = body;
 
-    const updateData: Partial<typeof users.$inferInsert> = {
-      updatedAt: new Date(),
-    };
+    // Check if new username is taken by someone else
+    if (username) {
+      const { data: existing } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', username)
+        .neq('id', user.id)
+        .maybeSingle();
 
+      if (existing) {
+        return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
+      }
+    }
+
+    const updateData: {
+      name?: string | null;
+      username?: string | null;
+      bio?: string | null;
+      website?: string | null;
+      image?: string | null;
+    } = {};
     if (name !== undefined) updateData.name = name;
     if (username !== undefined) updateData.username = username;
     if (bio !== undefined) updateData.bio = bio;
     if (website !== undefined) updateData.website = website;
     if (image !== undefined) updateData.image = image;
 
-    // Check if new username is taken by someone else
-    if (username) {
-      const existing = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.username, username))
-        .limit(1);
+    const { data: updated, error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('id', user.id)
+      .select()
+      .single();
 
-      if (existing.length > 0 && existing[0].id !== userId) {
-        return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
-      }
-    }
+    if (error) throw error;
 
-    const [updated] = await db
-      .update(users)
-      .set(updateData)
-      .where(eq(users.id, userId))
-      .returning();
-
-    return NextResponse.json(updated);
+    return NextResponse.json({ profile: updated });
   } catch (error) {
-    console.error('[users/me PATCH]', error);
+    console.error('PATCH /api/users/me error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

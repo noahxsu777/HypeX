@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Search, X } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
-import type { Post, User } from '@/types';
+import type { Post, Profile } from '@/types';
 import { useDebounce } from '@/lib/hooks';
 
 export default function ExploreContent() {
@@ -24,8 +24,10 @@ export default function ExploreContent() {
   const { data: searchData, isLoading: searchLoading } = useQuery({
     queryKey: ['search', debouncedQuery],
     queryFn: async () => {
-      const res = await fetch(`/api/users/search?q=${encodeURIComponent(debouncedQuery)}`);
-      return res.json() as Promise<{ users: User[] }>;
+      const res = await fetch(
+        `/api/users/search?q=${encodeURIComponent(debouncedQuery)}`
+      );
+      return res.json() as Promise<{ users: Profile[] }>;
     },
     enabled: debouncedQuery.length >= 2,
   });
@@ -41,7 +43,7 @@ export default function ExploreContent() {
           <Search size={16} className="text-gray-400 flex-shrink-0" />
           <input
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Buscar..."
             className="flex-1 bg-transparent text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none"
             autoComplete="off"
@@ -74,19 +76,29 @@ export default function ExploreContent() {
             <div className="flex flex-col items-center py-16 gap-3 text-center px-8">
               <Search size={40} className="text-gray-300 dark:text-gray-600" />
               <p className="font-semibold text-gray-900 dark:text-white">Sin resultados</p>
-              <p className="text-sm text-gray-500 dark:text-gray-400">No se encontraron usuarios para "{debouncedQuery}"</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                No se encontraron usuarios para &ldquo;{debouncedQuery}&rdquo;
+              </p>
             </div>
           )}
-          {searchUsers.map(user => (
+          {searchUsers.map((user) => (
             <Link
               key={user.id}
               href={`/profile/${user.username}`}
               className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors"
             >
-              <Avatar src={user.image} alt={user.name} size="md" />
+              <Avatar
+                src={user.image}
+                alt={user.name ?? user.username ?? ''}
+                size="md"
+              />
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm text-gray-900 dark:text-white">{user.username}</p>
-                <p className="text-sm text-gray-500 dark:text-gray-400 truncate">{user.name}</p>
+                <p className="font-semibold text-sm text-gray-900 dark:text-white">
+                  {user.username}
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                  {user.name}
+                </p>
                 {user._count && (
                   <p className="text-xs text-gray-400">
                     {user._count.followers.toLocaleString()} seguidores
@@ -97,7 +109,6 @@ export default function ExploreContent() {
           ))}
         </div>
       ) : (
-        /* Explore grid */
         <div>
           {postsLoading ? (
             <ExploreGridSkeleton />
@@ -114,9 +125,15 @@ function ExploreGrid({ posts }: { posts: Post[] }) {
   if (posts.length === 0) {
     return (
       <div className="flex flex-col items-center py-20 gap-4 text-center px-8">
-        <div className="text-5xl">🔍</div>
-        <h3 className="text-lg font-bold text-gray-900 dark:text-white">Explora contenido</h3>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Cuando haya publicaciones disponibles, aparecerán aquí.</p>
+        <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
+          <Search size={32} className="text-gray-400" />
+        </div>
+        <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          Explora contenido
+        </h3>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Cuando haya publicaciones disponibles, aparecerán aquí.
+        </p>
       </div>
     );
   }
@@ -135,16 +152,22 @@ function ExploreGrid({ posts }: { posts: Post[] }) {
             style={{ aspectRatio: isLarge ? undefined : '1/1' }}
           >
             {isLarge && <div style={{ paddingBottom: '100%' }} />}
-            <img
-              src={post.mediaUrls?.[0] || ''}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover"
-              loading="lazy"
-            />
+            {post.media_urls?.[0] && (
+              <img
+                src={post.media_urls[0]}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover"
+                loading="lazy"
+              />
+            )}
             {post.type === 'carousel' && (
               <div className="absolute top-1.5 right-1.5">
-                <svg className="w-4 h-4 text-white drop-shadow" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M2 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6zm5-4a1 1 0 000 2h10a3 3 0 013 3v10a1 1 0 102 0V7a5 5 0 00-5-5H7z"/>
+                <svg
+                  className="w-4 h-4 text-white drop-shadow"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M2 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6zm5-4a1 1 0 000 2h10a3 3 0 013 3v10a1 1 0 102 0V7a5 5 0 00-5-5H7z" />
                 </svg>
               </div>
             )}
@@ -161,8 +184,13 @@ function ExploreGridSkeleton() {
       {[...Array(12)].map((_, i) => (
         <div
           key={i}
-          className={`bg-gray-200 dark:bg-gray-800 skeleton ${i % 7 === 0 ? 'col-span-2 row-span-2' : ''}`}
-          style={{ aspectRatio: i % 7 === 0 ? undefined : '1/1', paddingBottom: i % 7 === 0 ? '100%' : undefined }}
+          className={`bg-gray-200 dark:bg-gray-800 skeleton ${
+            i % 7 === 0 ? 'col-span-2 row-span-2' : ''
+          }`}
+          style={{
+            aspectRatio: i % 7 === 0 ? undefined : '1/1',
+            paddingBottom: i % 7 === 0 ? '100%' : undefined,
+          }}
         />
       ))}
     </div>

@@ -1,15 +1,14 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Heart } from 'lucide-react';
-import { useSession } from 'next-auth/react';
-import { cn } from '@/lib/utils';
-import { timeAgo } from '@/lib/utils';
+import { cn, timeAgo } from '@/lib/utils';
 import type { Comment } from '@/types';
 import Avatar from '@/components/ui/Avatar';
 import Modal from '@/components/ui/Modal';
 
 interface CommentsSheetProps {
   postId: string;
+  currentUserId: string;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -28,7 +27,7 @@ function CommentSkeleton() {
 }
 
 function CommentItem({ comment }: { comment: Comment }) {
-  const [liked, setLiked] = useState(comment.isLiked ?? false);
+  const [liked, setLiked] = useState(comment.is_liked ?? false);
   const [likeCount, setLikeCount] = useState(comment._count?.likes ?? 0);
 
   const toggleLike = useCallback(async () => {
@@ -47,7 +46,7 @@ function CommentItem({ comment }: { comment: Comment }) {
     <div className="flex gap-3 px-4 py-2.5">
       <Avatar
         src={comment.user.image}
-        alt={comment.user.name}
+        alt={comment.user.name ?? comment.user.username ?? ''}
         size="sm"
         className="flex-shrink-0"
       />
@@ -58,11 +57,11 @@ function CommentItem({ comment }: { comment: Comment }) {
         </p>
         <div className="flex items-center gap-3 mt-1">
           <span className="text-xs text-gray-400 dark:text-gray-500">
-            {timeAgo(comment.createdAt)}
+            {timeAgo(comment.created_at)}
           </span>
           {likeCount > 0 && (
             <span className="text-xs text-gray-400 dark:text-gray-500">
-              {likeCount} {likeCount === 1 ? 'me gusta' : 'me gusta'}
+              {likeCount} me gusta
             </span>
           )}
           <button
@@ -72,22 +71,6 @@ function CommentItem({ comment }: { comment: Comment }) {
             Responder
           </button>
         </div>
-        {/* Replies */}
-        {comment.replies && comment.replies.length > 0 && (
-          <div className="mt-2 space-y-2 pl-2 border-l-2 border-gray-100 dark:border-gray-800">
-            {comment.replies.map((reply) => (
-              <div key={reply.id} className="flex gap-2">
-                <Avatar src={reply.user.image} alt={reply.user.name} size="xs" className="flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-gray-900 dark:text-white leading-snug">
-                    <span className="font-semibold mr-1">{reply.user.username}</span>
-                    {reply.content}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
       <button
         type="button"
@@ -104,8 +87,7 @@ function CommentItem({ comment }: { comment: Comment }) {
   );
 }
 
-export default function CommentsSheet({ postId, isOpen, onClose }: CommentsSheetProps) {
-  const { data: session } = useSession();
+export default function CommentsSheet({ postId, currentUserId, isOpen, onClose }: CommentsSheetProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(false);
   const [text, setText] = useState('');
@@ -127,56 +109,29 @@ export default function CommentsSheet({ postId, isOpen, onClose }: CommentsSheet
       e.preventDefault();
       if (!text.trim() || submitting) return;
       setSubmitting(true);
-      const optimistic: Comment = {
-        id: `opt-${Date.now()}`,
-        userId: session?.user?.id ?? '',
-        user: {
-          id: session?.user?.id ?? '',
-          name: session?.user?.name ?? '',
-          username:
-            ((session?.user as unknown) as Record<string, unknown>)?.username as string ?? 'yo',
-          email: session?.user?.email ?? '',
-          image: session?.user?.image ?? null,
-          bio: null,
-          website: null,
-          isVerified: false,
-          isPrivate: false,
-          createdAt: new Date(),
-        },
-        postId,
-        reelId: null,
-        parentId: null,
-        content: text.trim(),
-        createdAt: new Date(),
-        _count: { likes: 0, replies: 0 },
-        isLiked: false,
-      };
-      setComments((prev) => [optimistic, ...prev]);
+      const content = text.trim();
       setText('');
       try {
         const res = await fetch(`/api/posts/${postId}/comments`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: optimistic.content }),
+          body: JSON.stringify({ content }),
         });
         const json = await res.json();
         if (res.ok && json.data) {
-          setComments((prev) =>
-            prev.map((c) => (c.id === optimistic.id ? json.data : c))
-          );
+          setComments((prev) => [json.data, ...prev]);
         }
       } catch {
-        // leave optimistic in place
+        // silently fail
       } finally {
         setSubmitting(false);
       }
     },
-    [text, submitting, postId, session]
+    [text, submitting, postId]
   );
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Comentarios">
-      {/* Comments list */}
       <div className="min-h-[200px]">
         {loading ? (
           <>
@@ -196,15 +151,8 @@ export default function CommentsSheet({ postId, isOpen, onClose }: CommentsSheet
         )}
       </div>
 
-      {/* Input area */}
       <div className="sticky bottom-0 px-4 py-3 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
         <form onSubmit={handleSubmit} className="flex items-center gap-3">
-          <Avatar
-            src={session?.user?.image}
-            alt={session?.user?.name ?? 'Yo'}
-            size="sm"
-            className="flex-shrink-0"
-          />
           <input
             ref={inputRef}
             type="text"

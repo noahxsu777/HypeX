@@ -1,194 +1,141 @@
-import { NextResponse } from 'next/server';
-import { eq, and, desc, lt, ne, sql } from 'drizzle-orm';
-import { db } from '@/db';
-import {
-  messages,
-  users,
-  conversations,
-  conversationParticipants,
-  notifications,
-} from '@/db/schema';
-import { auth } from '@/lib/auth';
-import { pusherServer } from '@/lib/pusher-server';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient, createAdminClient } from '@/lib/supabase/server';
 
 export async function GET(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { conversationId } = await params;
-    const userId = session.user.id;
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = new URL(request.url);
     const cursor = searchParams.get('cursor');
-    const limit = 30;
 
     // Verify user is a participant
-    const participant = await db
-      .select()
-      .from(conversationParticipants)
-      .where(
-        and(
-          eq(conversationParticipants.conversationId, conversationId),
-          eq(conversationParticipants.userId, userId)
-        )
-      )
-      .limit(1);
+    const { data: participant } = await supabase
+      .from('conversation_participants')
+      .select('conversation_id')
+      .eq('conversation_id', conversationId)
+      .eq('user_id', user.id)
+      .maybeSingle();
 
-    if (participant.length === 0) {
+    if (!participant) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const whereClause = cursor
-      ? and(
-          eq(messages.conversationId, conversationId),
-          lt(messages.createdAt, new Date(cursor))
-        )
-      : eq(messages.conversationId, conversationId);
+    let query = supabase
+      .from('messages')
+      .select('*, sender:profiles(*)')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(31);
 
-    const msgRows = await db
-      .select({
-        message: messages,
-        sender: {
-          id: users.id,
-          name: users.name,
-          username: users.username,
-          image: users.image,
-          isVerified: users.isVerified,
-        },
-      })
-      .from(messages)
-      .leftJoin(users, eq(messages.senderId, users.id))
-      .where(whereClause)
-      .orderBy(desc(messages.createdAt))
-      .limit(limit + 1);
+    if (cursor) {
+      query = query.lt('created_at', cursor);
+    }
 
-    const hasMore = msgRows.length > limit;
-    const slice = hasMore ? msgRows.slice(0, limit) : msgRows;
+    const { data: messagesRaw, error } = await query;
+    if (error) throw error;
+
+    const messages = (messagesRaw ?? []) as Array<Record<string, unknown> & { created_at: string }>;
+    const hasMore = messages.length > 30;
+    const pageMessages = hasMore ? messages.slice(0, 30) : messages;
 
     // Mark unread messages from others as read
-    await db
-      .update(messages)
-      .set({ isRead: true })
-      .where(
-        and(
-          eq(messages.conversationId, conversationId),
-          eq(messages.isRead, false),
-          ne(messages.senderId, userId)
-        )
-      );
-
-    const nextCursor = hasMore
-      ? slice[slice.length - 1].message.createdAt.toISOString()
-      : null;
+    await supabase
+      .from('messages')
+      .update({ is_read: true })
+      .eq('conversation_id', conversationId)
+      .eq('is_read', false)
+      .neq('sender_id', user.id);
 
     return NextResponse.json({
-      messages: slice.map(({ message, sender }) => ({ ...message, sender })),
-      nextCursor,
+      messages: pageMessages,
+      next_cursor: hasMore ? pageMessages[pageMessages.length - 1].created_at : null,
     });
   } catch (error) {
-    console.error('[messages/[conversationId] GET]', error);
+    console.error('GET /api/messages/[conversationId] error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function POST(
-  req: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { conversationId } = await params;
-    const userId = session.user.id;
-    const body = await req.json();
-    const { content, mediaUrl, mediaType, replyToId } = body;
+    const body = await request.json();
+    const { content, media_url, media_type, reply_to_id } = body;
 
-    if (!content && !mediaUrl) {
-      return NextResponse.json({ error: 'content or mediaUrl is required' }, { status: 400 });
+    if (!content && !media_url) {
+      return NextResponse.json({ error: 'content or media_url is required' }, { status: 400 });
     }
 
     // Verify user is a participant
-    const participant = await db
-      .select()
-      .from(conversationParticipants)
-      .where(
-        and(
-          eq(conversationParticipants.conversationId, conversationId),
-          eq(conversationParticipants.userId, userId)
-        )
-      )
-      .limit(1);
+    const { data: participant } = await supabase
+      .from('conversation_participants')
+      .select('conversation_id')
+      .eq('conversation_id', conversationId)
+      .eq('user_id', user.id)
+      .maybeSingle();
 
-    if (participant.length === 0) {
+    if (!participant) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const [newMessage] = await db
-      .insert(messages)
-      .values({
-        conversationId,
-        senderId: userId,
+    const { data: messageRaw, error } = await supabase
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_id: user.id,
         content: content ?? null,
-        mediaUrl: mediaUrl ?? null,
-        mediaType: mediaType ?? null,
-        replyToId: replyToId ?? null,
+        media_url: media_url ?? null,
+        media_type: media_type ?? null,
+        reply_to_id: reply_to_id ?? null,
       })
-      .returning();
+      .select('*, sender:profiles(*)')
+      .single();
 
-    // Update conversation updatedAt
-    await db
-      .update(conversations)
-      .set({ updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
+    if (error) throw error;
+    const message = messageRaw as Record<string, unknown> | null;
 
-    // Get sender info
-    const [sender] = await db
-      .select({ id: users.id, name: users.name, username: users.username, image: users.image })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+    // Update conversation updated_at
+    await supabase
+      .from('conversations')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', conversationId);
 
-    const messageWithSender = { ...newMessage, sender };
+    // Notify other participants using admin client (bypasses RLS for inserting to other users)
+    const { data: otherParticipants } = await supabase
+      .from('conversation_participants')
+      .select('user_id')
+      .eq('conversation_id', conversationId)
+      .neq('user_id', user.id);
 
-    // Trigger Pusher event
-    await pusherServer.trigger(
-      `private-conv-${conversationId}`,
-      'new-message',
-      { message: messageWithSender }
-    );
-
-    // Notify other participants
-    const otherParticipants = await db
-      .select({ userId: conversationParticipants.userId })
-      .from(conversationParticipants)
-      .where(
-        and(
-          eq(conversationParticipants.conversationId, conversationId),
-          ne(conversationParticipants.userId, userId)
-        )
+    if (otherParticipants && otherParticipants.length > 0) {
+      const admin = await createAdminClient();
+      await admin.from('notifications').insert(
+        otherParticipants.map((p) => ({
+          user_id: p.user_id,
+          actor_id: user.id,
+          type: 'message' as const,
+          target_id: conversationId,
+          target_type: 'conversation',
+        }))
       );
-
-    for (const p of otherParticipants) {
-      await db.insert(notifications).values({
-        userId: p.userId,
-        actorId: userId,
-        type: 'message',
-        targetId: conversationId,
-        targetType: 'conversation',
-      });
     }
 
-    return NextResponse.json(messageWithSender, { status: 201 });
+    return NextResponse.json({ message }, { status: 201 });
   } catch (error) {
-    console.error('[messages/[conversationId] POST]', error);
+    console.error('POST /api/messages/[conversationId] error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

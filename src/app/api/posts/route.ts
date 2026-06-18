@@ -1,173 +1,126 @@
-import { NextResponse } from 'next/server';
-import { eq, and, desc, sql, or, inArray, count, lt } from 'drizzle-orm';
-import { db } from '@/db';
-import { posts, users, likes, savedPosts, follows, comments, hashtags, postHashtags } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
-export async function GET(req: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = new URL(request.url);
     const cursor = searchParams.get('cursor');
-    const limit = 20;
 
-    // Get IDs of users this user follows
-    const followingRows = await db
-      .select({ followingId: follows.followingId })
-      .from(follows)
-      .where(eq(follows.followerId, userId));
+    // Get IDs of users the current user follows
+    const { data: following } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', user.id);
 
-    const followingIds = followingRows.map((r) => r.followingId);
-    // Include own posts
-    const feedUserIds = [...followingIds, userId];
+    const followingIds = following?.map((f) => f.following_id) ?? [];
+    const feedIds = [...followingIds, user.id];
 
-    const whereClause = feedUserIds.length > 0
-      ? cursor
-        ? and(
-            inArray(posts.userId, feedUserIds),
-            lt(posts.createdAt, new Date(cursor))
-          )
-        : inArray(posts.userId, feedUserIds)
-      : cursor
-        ? and(eq(posts.userId, userId), lt(posts.createdAt, new Date(cursor)))
-        : eq(posts.userId, userId);
+    let query = supabase
+      .from('posts')
+      .select('*, user:profiles(*)')
+      .in('user_id', feedIds)
+      .order('created_at', { ascending: false })
+      .limit(21);
 
-    const feedPosts = await db
-      .select({
-        post: posts,
-        user: {
-          id: users.id,
-          name: users.name,
-          username: users.username,
-          image: users.image,
-          isVerified: users.isVerified,
-        },
-      })
-      .from(posts)
-      .leftJoin(users, eq(posts.userId, users.id))
-      .where(whereClause)
-      .orderBy(desc(posts.createdAt))
-      .limit(limit + 1);
-
-    const hasMore = feedPosts.length > limit;
-    const slice = hasMore ? feedPosts.slice(0, limit) : feedPosts;
-
-    // Enrich with like/save status and counts
-    const postIds = slice.map((r) => r.post.id);
-
-    let likedSet = new Set<string>();
-    let savedSet = new Set<string>();
-    let likeCounts: Record<string, number> = {};
-    let commentCounts: Record<string, number> = {};
-
-    if (postIds.length > 0) {
-      const [userLikes, userSaved, likeCountRows, commentCountRows] = await Promise.all([
-        db
-          .select({ targetId: likes.targetId })
-          .from(likes)
-          .where(and(eq(likes.userId, userId), inArray(likes.targetId, postIds), eq(likes.targetType, 'post'))),
-        db
-          .select({ postId: savedPosts.postId })
-          .from(savedPosts)
-          .where(and(eq(savedPosts.userId, userId), inArray(savedPosts.postId, postIds))),
-        db
-          .select({ targetId: likes.targetId, cnt: count() })
-          .from(likes)
-          .where(and(inArray(likes.targetId, postIds), eq(likes.targetType, 'post')))
-          .groupBy(likes.targetId),
-        db
-          .select({ postId: comments.postId, cnt: count() })
-          .from(comments)
-          .where(inArray(comments.postId, postIds))
-          .groupBy(comments.postId),
-      ]);
-
-      likedSet = new Set(userLikes.map((l) => l.targetId));
-      savedSet = new Set(userSaved.map((s) => s.postId));
-      likeCounts = Object.fromEntries(likeCountRows.map((r) => [r.targetId, Number(r.cnt)]));
-      commentCounts = Object.fromEntries(commentCountRows.map((r) => [r.postId!, Number(r.cnt)]));
+    if (cursor) {
+      query = query.lt('created_at', cursor);
     }
 
-    const enriched = slice.map(({ post, user }) => ({
+    const { data: postsRaw, error } = await query;
+    if (error) throw error;
+
+    const posts = (postsRaw ?? []) as Array<{ id: string; created_at: string; [key: string]: unknown }>;
+    const hasMore = posts.length > 20;
+    const pagePosts = hasMore ? posts.slice(0, 20) : posts;
+
+    const postIds = pagePosts.map((p) => p.id);
+
+    const [likesRes, savedRes, likeCountsRes, commentCountsRes] = await Promise.all([
+      supabase
+        .from('likes')
+        .select('target_id')
+        .eq('user_id', user.id)
+        .eq('target_type', 'post')
+        .in('target_id', postIds),
+      supabase
+        .from('saved_posts')
+        .select('post_id')
+        .eq('user_id', user.id)
+        .in('post_id', postIds),
+      supabase
+        .from('likes')
+        .select('target_id')
+        .eq('target_type', 'post')
+        .in('target_id', postIds),
+      supabase
+        .from('comments')
+        .select('post_id')
+        .in('post_id', postIds),
+    ]);
+
+    const likedSet = new Set(likesRes.data?.map((l) => l.target_id) ?? []);
+    const savedSet = new Set(savedRes.data?.map((s) => s.post_id) ?? []);
+
+    const likeCountMap: Record<string, number> = {};
+    for (const l of likeCountsRes.data ?? []) {
+      likeCountMap[l.target_id] = (likeCountMap[l.target_id] ?? 0) + 1;
+    }
+
+    const commentCountMap: Record<string, number> = {};
+    for (const c of commentCountsRes.data ?? []) {
+      if (c.post_id) {
+        commentCountMap[c.post_id] = (commentCountMap[c.post_id] ?? 0) + 1;
+      }
+    }
+
+    const enrichedPosts = pagePosts.map((post) => ({
       ...post,
-      user,
-      isLiked: likedSet.has(post.id),
-      isSaved: savedSet.has(post.id),
-      likeCount: likeCounts[post.id] ?? 0,
-      commentCount: commentCounts[post.id] ?? 0,
+      is_liked: likedSet.has(post.id),
+      is_saved: savedSet.has(post.id),
+      _count: {
+        likes: likeCountMap[post.id] ?? 0,
+        comments: commentCountMap[post.id] ?? 0,
+      },
     }));
 
-    const nextCursor = hasMore
-      ? slice[slice.length - 1].post.createdAt.toISOString()
-      : null;
-
-    return NextResponse.json({ posts: enriched, nextCursor });
+    return NextResponse.json({
+      posts: enrichedPosts,
+      next_cursor: hasMore ? pagePosts[pagePosts.length - 1].created_at : null,
+    });
   } catch (error) {
-    console.error('[posts GET]', error);
+    console.error('GET /api/posts error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const body = await request.json();
+    const { type, caption, location, media_urls } = body;
+
+    if (!type || !media_urls || !Array.isArray(media_urls) || media_urls.length === 0) {
+      return NextResponse.json({ error: 'type and media_urls are required' }, { status: 400 });
     }
 
-    const userId = session.user.id;
-    const body = await req.json();
-    const { caption, location, mediaUrls, type } = body;
+    const { data: post, error } = await supabase
+      .from('posts')
+      .insert({ user_id: user.id, type, caption: caption ?? null, location: location ?? null, media_urls })
+      .select('*, user:profiles(*)')
+      .single();
 
-    if (!type || !mediaUrls || mediaUrls.length === 0) {
-      return NextResponse.json({ error: 'type and mediaUrls are required' }, { status: 400 });
-    }
+    if (error) throw error;
 
-    const [newPost] = await db
-      .insert(posts)
-      .values({ userId, caption, location, mediaUrls, type })
-      .returning();
-
-    // Extract and upsert hashtags
-    if (caption) {
-      const tagMatches = caption.match(/#(\w+)/g) ?? [];
-      const tagNames = tagMatches.map((t: string) => t.slice(1).toLowerCase());
-
-      for (const tagName of tagNames) {
-        // Upsert hashtag
-        const existing = await db
-          .select()
-          .from(hashtags)
-          .where(eq(hashtags.name, tagName))
-          .limit(1);
-
-        let hashtagId: string;
-        if (existing.length > 0) {
-          hashtagId = existing[0].id;
-          await db
-            .update(hashtags)
-            .set({ postCount: sql`${hashtags.postCount} + 1` })
-            .where(eq(hashtags.id, hashtagId));
-        } else {
-          const [newTag] = await db
-            .insert(hashtags)
-            .values({ name: tagName, postCount: 1 })
-            .returning();
-          hashtagId = newTag.id;
-        }
-
-        await db.insert(postHashtags).values({ postId: newPost.id, hashtagId }).onConflictDoNothing();
-      }
-    }
-
-    return NextResponse.json(newPost, { status: 201 });
+    return NextResponse.json({ post }, { status: 201 });
   } catch (error) {
-    console.error('[posts POST]', error);
+    console.error('POST /api/posts error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -1,16 +1,16 @@
 'use client';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Home, Search, PlusSquare, Film, User } from 'lucide-react';
-import { useSession } from 'next-auth/react';
+import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 import Avatar from '@/components/ui/Avatar';
+import type { Profile } from '@/types';
 
 interface BottomNavProps {
   unreadNotifications?: number;
   unreadMessages?: number;
-  /** Optional pre-fetched user (from MainLayout server component) */
-  user?: { id?: string; name?: string | null; image?: string | null; email?: string | null } | null;
 }
 
 interface NavItem {
@@ -20,9 +20,26 @@ interface NavItem {
   isCreate?: boolean;
 }
 
-export default function BottomNav({ unreadNotifications: _unreadNotifications, unreadMessages: _unreadMessages }: BottomNavProps) {
+export default function BottomNav({
+  unreadNotifications: _unreadNotifications,
+  unreadMessages: _unreadMessages,
+}: BottomNavProps) {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+          .then(({ data }) => setProfile(data));
+      }
+    });
+  }, []);
 
   const isReels = pathname === '/reels';
 
@@ -51,22 +68,19 @@ export default function BottomNav({ unreadNotifications: _unreadNotifications, u
     {
       href: '/profile',
       label: 'Perfil',
-      icon:
-        session?.user?.image ? (
-          <Avatar
-            src={session.user.image}
-            alt={session.user.name ?? 'Perfil'}
-            size="xs"
-            className={cn(
-              'ring-2 ring-offset-1',
-              pathname === '/profile'
-                ? 'ring-purple-500'
-                : 'ring-transparent'
-            )}
-          />
-        ) : (
-          <User size={26} />
-        ),
+      icon: profile?.image ? (
+        <Avatar
+          src={profile.image}
+          alt={profile.name ?? profile.username ?? 'Perfil'}
+          size="xs"
+          className={cn(
+            'ring-2 ring-offset-1',
+            pathname === '/profile' ? 'ring-purple-500' : 'ring-transparent'
+          )}
+        />
+      ) : (
+        <User size={26} />
+      ),
     },
   ];
 
@@ -83,9 +97,7 @@ export default function BottomNav({ unreadNotifications: _unreadNotifications, u
       <div className="flex items-center justify-around px-2 h-14">
         {items.map((item) => {
           const isActive =
-            item.href === '/'
-              ? pathname === '/'
-              : pathname.startsWith(item.href);
+            item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
 
           if (item.isCreate) {
             return (

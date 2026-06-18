@@ -1,22 +1,20 @@
-import { auth } from '@/lib/auth';
-import { redirect } from 'next/navigation';
-import { db } from '@/db';
-import { posts } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { notFound } from 'next/navigation';
+import { createClient } from '@/lib/supabase/server';
+import { redirect, notFound } from 'next/navigation';
 import PostDetailPage from '@/components/post/PostDetailPage';
 
 export default async function PostPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await auth();
-  if (!session) redirect('/login');
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
 
-  const post = await db.query.posts.findFirst({
-    where: eq(posts.id, id),
-    with: { user: true },
-  });
+  const { data: post } = await supabase
+    .from('posts')
+    .select('id')
+    .eq('id', id)
+    .single();
 
   if (!post) notFound();
 
-  return <PostDetailPage postId={id} currentUserId={session.user.id} />;
+  return <PostDetailPage postId={id} currentUserId={user.id} />;
 }

@@ -1,58 +1,43 @@
-import { auth } from '@/lib/auth';
-import { db } from '@/db';
-import { users, follows, posts } from '@/db/schema';
-import { eq, and, count, sql } from 'drizzle-orm';
-import { notFound } from 'next/navigation';
+import { createClient } from '@/lib/supabase/server';
+import { redirect, notFound } from 'next/navigation';
 import ProfilePage from '@/components/profile/ProfilePage';
 
-interface Props {
-  params: Promise<{ username: string }>;
-}
+export default async function UserProfilePage({ params }: { params: Promise<{ username: string }> }) {
+  const { username } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
 
-export default async function UserProfilePage({ params }: Props) {
-  const [session, { username }] = await Promise.all([auth(), params]);
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('username', username)
+    .single();
 
-  // Fetch user by username
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.username, username))
-    .limit(1);
+  if (!profile) notFound();
 
-  if (!user) notFound();
-
-  const currentUserId = session?.user?.id as string;
-  const isOwnProfile = currentUserId === user.id;
-
-  // Get counts
-  const [[followerCount], [followingCount], [postCount], following] = await Promise.all([
-    db.select({ value: count() }).from(follows).where(eq(follows.followingId, user.id)),
-    db.select({ value: count() }).from(follows).where(eq(follows.followerId, user.id)),
-    db.select({ value: count() }).from(posts).where(eq(posts.userId, user.id)),
-    currentUserId && !isOwnProfile
-      ? db.select().from(follows).where(and(eq(follows.followerId, currentUserId), eq(follows.followingId, user.id))).limit(1)
-      : Promise.resolve([]),
+  const [followersRes, followingRes, postsRes, isFollowingRes] = await Promise.all([
+    supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', profile.id),
+    supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', profile.id),
+    supabase.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', profile.id),
+    profile.id !== user.id
+      ? supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', user.id).eq('following_id', profile.id)
+      : Promise.resolve({ count: 0 }),
   ]);
 
-  const profileData = {
-    id: user.id,
-    name: user.name ?? '',
-    username: user.username ?? username,
-    email: user.email ?? '',
-    image: user.image,
-    bio: user.bio,
-    website: user.website,
-    isVerified: user.isVerified,
-    isPrivate: user.isPrivate,
-    createdAt: user.createdAt,
-    _count: {
-      followers: followerCount.value,
-      following: followingCount.value,
-      posts: postCount.value,
-    },
-    isFollowing: following.length > 0,
-    isOwnProfile,
-  };
-
-  return <ProfilePage user={profileData} currentUserId={currentUserId} />;
+  return (
+    <ProfilePage
+      user={{
+        ...profile,
+        _count: {
+          followers: followersRes.count ?? 0,
+          following: followingRes.count ?? 0,
+          posts: postsRes.count ?? 0,
+        },
+        is_following: (isFollowingRes.count ?? 0) > 0,
+        is_own_profile: profile.id === user.id,
+      }}
+      currentUserId={user.id}
+    />
+  );
 }

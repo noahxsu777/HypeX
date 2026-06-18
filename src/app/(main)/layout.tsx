@@ -1,9 +1,17 @@
-import { auth } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import MainLayout from '@/components/layout/MainLayout';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const session = await auth();
-  if (!session) redirect('/login');
-  return <MainLayout user={session.user}>{children}</MainLayout>;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
+  return <MainLayout currentUserId={user.id} currentUserImage={profile?.image ?? null}>{children}</MainLayout>;
 }

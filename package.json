@@ -10,20 +10,14 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@auth/drizzle-adapter": "^1.11.2",
     "@hookform/resolvers": "^3.9.0",
-    "@neondatabase/serverless": "^1.1.0",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.2",
     "@tanstack/react-query": "^5.51.0",
-    "bcryptjs": "^2.4.3",
     "clsx": "^2.1.1",
-    "cloudinary": "^2.5.1",
-    "drizzle-orm": "^0.45.2",
     "framer-motion": "^11.3.0",
     "lucide-react": "^0.428.0",
     "next": "^15.1.0",
-    "next-auth": "^5.0.0-beta.25",
-    "pusher": "^5.2.0",
-    "pusher-js": "^8.4.0-rc2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.53.0",
@@ -32,7 +26,6 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.5.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

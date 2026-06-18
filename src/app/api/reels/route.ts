@@ -1,111 +1,119 @@
-import { NextResponse } from 'next/server';
-import { eq, and, desc, count, inArray, lt } from 'drizzle-orm';
-import { db } from '@/db';
-import { reels, users, likes, savedPosts } from '@/db/schema';
-import { auth } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
-export async function GET(req: Request) {
+export async function GET(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = new URL(request.url);
     const cursor = searchParams.get('cursor');
-    const limit = 20;
 
-    const whereClause = cursor ? lt(reels.createdAt, new Date(cursor)) : undefined;
+    let query = supabase
+      .from('reels')
+      .select('*, user:profiles(*)')
+      .order('created_at', { ascending: false })
+      .limit(21);
 
-    const reelRows = await db
-      .select({
-        reel: reels,
-        user: {
-          id: users.id,
-          name: users.name,
-          username: users.username,
-          image: users.image,
-          isVerified: users.isVerified,
-        },
-      })
-      .from(reels)
-      .leftJoin(users, eq(reels.userId, users.id))
-      .where(whereClause)
-      .orderBy(desc(reels.createdAt))
-      .limit(limit + 1);
-
-    const hasMore = reelRows.length > limit;
-    const slice = hasMore ? reelRows.slice(0, limit) : reelRows;
-    const reelIds = slice.map((r) => r.reel.id);
-
-    let likedSet = new Set<string>();
-    let likeCounts: Record<string, number> = {};
-
-    if (reelIds.length > 0) {
-      const [userLikes, likeCountRows] = await Promise.all([
-        db
-          .select({ targetId: likes.targetId })
-          .from(likes)
-          .where(
-            and(
-              eq(likes.userId, userId),
-              inArray(likes.targetId, reelIds),
-              eq(likes.targetType, 'reel')
-            )
-          ),
-        db
-          .select({ targetId: likes.targetId, cnt: count() })
-          .from(likes)
-          .where(and(inArray(likes.targetId, reelIds), eq(likes.targetType, 'reel')))
-          .groupBy(likes.targetId),
-      ]);
-
-      likedSet = new Set(userLikes.map((l) => l.targetId));
-      likeCounts = Object.fromEntries(likeCountRows.map((r) => [r.targetId, Number(r.cnt)]));
+    if (cursor) {
+      query = query.lt('created_at', cursor);
     }
 
-    const enriched = slice.map(({ reel, user }) => ({
+    const { data: reelsRaw, error } = await query;
+    if (error) throw error;
+
+    const reels = (reelsRaw ?? []) as Array<{ id: string; created_at: string; [key: string]: unknown }>;
+    const hasMore = reels.length > 20;
+    const pageReels = hasMore ? reels.slice(0, 20) : reels;
+    const reelIds = pageReels.map((r) => r.id);
+
+    if (reelIds.length === 0) {
+      return NextResponse.json({ reels: [], next_cursor: null });
+    }
+
+    const [likeRes, likeCountsRes, commentCountsRes] = await Promise.all([
+      supabase
+        .from('likes')
+        .select('target_id')
+        .eq('user_id', user.id)
+        .eq('target_type', 'reel')
+        .in('target_id', reelIds),
+      supabase
+        .from('likes')
+        .select('target_id')
+        .eq('target_type', 'reel')
+        .in('target_id', reelIds),
+      supabase
+        .from('comments')
+        .select('reel_id')
+        .in('reel_id', reelIds),
+    ]);
+
+    const likedSet = new Set(likeRes.data?.map((l) => l.target_id) ?? []);
+
+    const likeCountMap: Record<string, number> = {};
+    for (const l of likeCountsRes.data ?? []) {
+      likeCountMap[l.target_id] = (likeCountMap[l.target_id] ?? 0) + 1;
+    }
+
+    const commentCountMap: Record<string, number> = {};
+    for (const c of commentCountsRes.data ?? []) {
+      if (c.reel_id) {
+        commentCountMap[c.reel_id] = (commentCountMap[c.reel_id] ?? 0) + 1;
+      }
+    }
+
+    const enriched = pageReels.map((reel) => ({
       ...reel,
-      user,
-      isLiked: likedSet.has(reel.id),
-      likeCount: likeCounts[reel.id] ?? 0,
+      is_liked: likedSet.has(reel.id),
+      _count: {
+        likes: likeCountMap[reel.id] ?? 0,
+        comments: commentCountMap[reel.id] ?? 0,
+      },
     }));
 
-    const nextCursor = hasMore
-      ? slice[slice.length - 1].reel.createdAt.toISOString()
-      : null;
-
-    return NextResponse.json({ reels: enriched, nextCursor });
+    return NextResponse.json({
+      reels: enriched,
+      next_cursor: hasMore ? pageReels[pageReels.length - 1].created_at : null,
+    });
   } catch (error) {
-    console.error('[reels GET]', error);
+    console.error('GET /api/reels error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const body = await request.json();
+    const { video_url, thumbnail_url, caption, audio_title, audio_artist } = body;
+
+    if (!video_url) {
+      return NextResponse.json({ error: 'video_url is required' }, { status: 400 });
     }
 
-    const userId = session.user.id;
-    const body = await req.json();
-    const { videoUrl, thumbnailUrl, caption, audioTitle, audioArtist } = body;
+    const { data: reelRaw, error } = await supabase
+      .from('reels')
+      .insert({
+        user_id: user.id,
+        video_url,
+        thumbnail_url: thumbnail_url ?? null,
+        caption: caption ?? null,
+        audio_title: audio_title ?? null,
+        audio_artist: audio_artist ?? null,
+      })
+      .select('*, user:profiles(*)')
+      .single();
 
-    if (!videoUrl) {
-      return NextResponse.json({ error: 'videoUrl is required' }, { status: 400 });
-    }
+    if (error) throw error;
 
-    const [newReel] = await db
-      .insert(reels)
-      .values({ userId, videoUrl, thumbnailUrl, caption, audioTitle, audioArtist })
-      .returning();
-
-    return NextResponse.json(newReel, { status: 201 });
+    return NextResponse.json({ reel: reelRaw }, { status: 201 });
   } catch (error) {
-    console.error('[reels POST]', error);
+    console.error('POST /api/reels error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
