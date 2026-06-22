@@ -45,7 +45,7 @@ export default function StoriesBar({ className }: StoriesBarProps) {
   useEffect(() => {
     fetch('/api/stories')
       .then((r) => r.json())
-      .then((json) => setStories(json.data ?? []))
+      .then((json) => setStories(json.stories ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

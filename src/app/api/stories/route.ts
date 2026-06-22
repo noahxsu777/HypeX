@@ -27,22 +27,9 @@ export async function GET(request: NextRequest) {
 
     if (error) throw error;
 
-    type StoryRow = { user_id: string; user: unknown; [key: string]: unknown };
-    const stories = (storiesRaw ?? []) as StoryRow[];
-
-    // Group by user
-    const grouped: Record<string, { user: unknown; stories: unknown[] }> = {};
-
-    for (const story of stories) {
-      const uid = story.user_id;
-      if (!grouped[uid]) {
-        grouped[uid] = { user: story.user, stories: [] };
-      }
-      const { user: _user, ...storyWithoutUser } = story;
-      grouped[uid].stories.push(storyWithoutUser);
-    }
-
-    return NextResponse.json({ stories: Object.values(grouped) });
+    // Return flat stories with user info — one entry per story
+    const stories = (storiesRaw ?? []) as Array<Record<string, unknown>>;
+    return NextResponse.json({ stories });
   } catch (error) {
     console.error('GET /api/stories error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

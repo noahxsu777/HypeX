@@ -9,22 +9,35 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const cursor = searchParams.get('cursor');
+    const explore = searchParams.get('explore') === 'true';
+    const limit = parseInt(searchParams.get('limit') ?? '21');
 
-    // Get IDs of users the current user follows
-    const { data: following } = await supabase
-      .from('follows')
-      .select('following_id')
-      .eq('follower_id', user.id);
+    let query;
 
-    const followingIds = following?.map((f) => f.following_id) ?? [];
-    const feedIds = [...followingIds, user.id];
+    if (explore) {
+      // Explore: show all posts from everyone
+      query = supabase
+        .from('posts')
+        .select('*, user:profiles(*)')
+        .order('created_at', { ascending: false })
+        .limit(limit + 1);
+    } else {
+      // Personal feed: posts from followed users + own posts
+      const { data: following } = await supabase
+        .from('follows')
+        .select('following_id')
+        .eq('follower_id', user.id);
 
-    let query = supabase
-      .from('posts')
-      .select('*, user:profiles(*)')
-      .in('user_id', feedIds)
-      .order('created_at', { ascending: false })
-      .limit(21);
+      const followingIds = following?.map((f) => f.following_id) ?? [];
+      const feedIds = [...followingIds, user.id];
+
+      query = supabase
+        .from('posts')
+        .select('*, user:profiles(*)')
+        .in('user_id', feedIds)
+        .order('created_at', { ascending: false })
+        .limit(limit + 1);
+    }
 
     if (cursor) {
       query = query.lt('created_at', cursor);
@@ -34,8 +47,9 @@ export async function GET(request: NextRequest) {
     if (error) throw error;
 
     const posts = (postsRaw ?? []) as Array<{ id: string; created_at: string; [key: string]: unknown }>;
-    const hasMore = posts.length > 20;
-    const pagePosts = hasMore ? posts.slice(0, 20) : posts;
+    const pageLimit = explore ? limit : 20;
+    const hasMore = posts.length > pageLimit;
+    const pagePosts = hasMore ? posts.slice(0, pageLimit) : posts;
 
     const postIds = pagePosts.map((p) => p.id);
 
@@ -90,6 +104,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       posts: enrichedPosts,
       next_cursor: hasMore ? pagePosts[pagePosts.length - 1].created_at : null,
+      nextCursor: hasMore ? pagePosts[pagePosts.length - 1].created_at : null,
     });
   } catch (error) {
     console.error('GET /api/posts error:', error);
