@@ -26,6 +26,8 @@ export async function GET(request: NextRequest) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
+      // Sync profile to Neon after OAuth login (non-blocking)
+      fetch(new URL('/api/users/sync-profile', origin).toString(), { method: 'POST' }).catch(() => {});
       return NextResponse.redirect(`${origin}${next}`);
     }
   }
