@@ -29,7 +29,7 @@ export async function POST() {
       is_verified: (sbProfileAny?.is_verified as boolean | null) ?? false,
     };
 
-    const db = getDb();
+    const db = await getDb();
     await db.insert(profiles).values(profileData).onConflictDoUpdate({
       target: profiles.id,
       set: {

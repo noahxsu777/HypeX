@@ -15,10 +15,9 @@ export async function GET(request: NextRequest) {
 
     if (!q) return NextResponse.json({ users: [] });
 
-    const db = getDb();
+    const db = await getDb();
     const searchPattern = `%${q}%`;
 
-    // Search in Neon
     const neonProfiles = await db
       .select()
       .from(profiles)

@@ -1,13 +1,18 @@
 import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
 import HomeFeed from '@/components/home/HomeFeed';
+import LoginPage from '@/app/(auth)/login/page';
 
 export default async function HomePage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect('/login');
+
+  // Show login at the root URL when not authenticated — no redirect
+  if (!user) {
+    return <LoginPage />;
+  }
+
   return (
-    <div className="min-h-screen bg-white dark:bg-black pt-0">
+    <div className="min-h-screen bg-white dark:bg-black">
       <HomeFeed userId={user.id} />
     </div>
   );

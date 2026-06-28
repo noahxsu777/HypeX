@@ -14,12 +14,12 @@ export async function GET(
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { username } = await params;
-    const db = getDb();
+    const db = await getDb();
 
     // Fetch from Neon
     let [profile] = await db.select().from(profiles).where(eq(profiles.username, username));
 
-    // Fallback to Supabase if not in Neon yet
+    // Fallback to Supabase if not in Neon yet (lazy sync)
     if (!profile) {
       const { data: sbProfile } = await supabase.from('profiles').select('*').eq('username', username).single();
       if (!sbProfile) return NextResponse.json({ error: 'User not found' }, { status: 404 });

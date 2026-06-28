@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const db = getDb();
+    const db = await getDb();
 
     // Try Neon first
     let [neonProfile] = await db.select().from(profiles).where(eq(profiles.id, user.id));
@@ -66,7 +66,7 @@ export async function PATCH(request: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const db = getDb();
+    const db = await getDb();
     const body = await request.json();
     const { name, username, bio, website, image } = body;
 

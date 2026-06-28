@@ -1,11 +1,15 @@
 import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
 import MainLayout from '@/components/layout/MainLayout';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect('/login');
+
+  // Unauthenticated: render the page content without navigation
+  // The page itself will decide what to show (login form)
+  if (!user) {
+    return <>{children}</>;
+  }
 
   const { data: profile } = await supabase
     .from('profiles')
